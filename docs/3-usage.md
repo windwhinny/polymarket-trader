@@ -3,14 +3,14 @@
 ## CLI 命令
 
 ```bash
-# 基本用法
-python run_agent.py --model deepseek-chat --start 2026-01 --end 2026-04
+# 回测模式
+python trader.py backtest --model deepseek-chat --start 2026-01 --end 2026-04
 
 # 完整参数
-python run_agent.py \
+python trader.py backtest \
   --provider openai \           # openai 或 anthropic
   --model deepseek-chat \       # 模型名
-  --api-key sk-xxx \            # 覆盖 config 中的 API key
+  --api-key sk-xxx \            # 覆盖 .env 中的 API key
   --base-url https://xxx/v1 \   # 覆盖 base URL
   --start 2026-01 \             # 起始月份
   --end 2026-04 \               # 结束月份
@@ -19,25 +19,33 @@ python run_agent.py \
   --parallel 4 \                # 并行线程数
   --run-id my-experiment \      # 自定义 run ID 前缀
   --output runs/custom/         # 自定义输出目录
+
+# 旧版入口（兼容）
+python run_agent.py --model deepseek-chat --start 2026-01 --end 2026-04
 ```
 
 ## 配置
 
-`config.yaml` 中的默认值，CLI 参数会覆盖：
+### .env（密钥，不提交）
+
+```bash
+DEEPSEEK_API_KEY=sk-xxx
+DEEPSEEK_BASE_URL=https://api.deepseek.com
+SERPAPI_API_KEY=xxx              # https://serper.dev 免费注册
+TAVILY_API_KEY=xxx               # 可选备选搜索引擎
+```
+
+### config.yaml（可提交的参数）
 
 ```yaml
-api_keys:
-  deepseek:
-    key: "sk-xxx"
-    base_url: "https://api.deepseek.com"
-    model: "deepseek-chat"
-  serpapi:
-    key: "xxx"   # https://serper.dev 免费注册
 backtest:
   start_month: "2026-01"
   end_month: "2026-04"
   initial_capital: 1000
   min_monthly_volume: 10000
+api:
+  page_limit: 100
+  max_pages: 8
 ```
 
 ## 运行输出

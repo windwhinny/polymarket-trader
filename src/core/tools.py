@@ -139,7 +139,7 @@ def execute_tool(name: str, args: dict, ctx: AgentContext) -> str:
 
 
 def _search_news(query: str, ctx: AgentContext) -> str:
-    from .info_gatherer import search_context
+    from .search import search_context
     from .config import Cache
 
     cache = Cache(ctx.config["cache"]["dir"], ctx.config["cache"]["ttl_hours"])

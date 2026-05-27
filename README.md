@@ -1,61 +1,65 @@
-# Polymarket Agent Backtest
+# Polymarket Trader
 
-基于 AI Agent 的 Polymarket 预测市场回测系统。
+基于 AI Agent 的 Polymarket 预测市场交易系统。
 
-**核心思路**：让 LLM 作为自主交易 Agent，在严格的时间约束下（只能看到某月之前的公开信息），调用搜索引擎收集信息、分析市场定价偏差、自主下注。通过回测历史数据验证 AI 的交易能力。
+**核心理念**：LLM 作为自主交易 Agent，调用搜索引擎收集信息、分析市场定价偏差、自主决策下注。
+
+## 模式
+
+| 模式 | 命令 | 状态 |
+|------|------|------|
+| backtest | `python trader.py backtest ...` | 可用 |
+| trade | `python trader.py trade ...` | 规划中 |
 
 ## 快速开始
 
 ```bash
-# 安装
 pip install -r requirements.txt
+cp .env.example .env  # 填写 API key
 
-# 运行（默认 DeepSeek，2026年 Q1，$2000 本金）
-python run_agent.py --model deepseek-chat --start 2026-01 --end 2026-04 --capital 2000
+# 回测 2026 Q1
+python trader.py backtest --model deepseek-chat --start 2026-01 --end 2026-04
 
-# 指定其他模型
-python run_agent.py --provider openai --model gpt-4o --start 2026-01 --end 2026-04
-python run_agent.py --provider anthropic --model claude-sonnet-4-20250514 --start 2026-01 --end 2026-04
+# 指定模型
+python trader.py backtest --provider anthropic --model claude-sonnet-4-20250514 --start 2026-01 --end 2026-04
 ```
 
 ## 项目结构
 
 ```
-polymarket-backtest/
-├── run_agent.py          # CLI 入口
-├── run.py                # 旧版入口（非 Agent 模式）
-├── config.yaml           # 默认配置
+polymarket-trader/
+├── trader.py               # CLI 入口 (backtest / trade)
+├── run_agent.py            # 旧版入口 (兼容)
+├── config.yaml             # 默认配置
 ├── src/
-│   ├── runner.py         # 回测编排器（含 trace）
-│   ├── agent_loop.py     # Agent 工具调用循环 + 系统 prompt
-│   ├── agent_tools.py    # 工具定义（search_news, place_bet 等）
-│   ├── llm.py            # 多模型支持（OpenAI / Anthropic）
-│   ├── tracer.py         # 运行追踪（JSONL trace 文件）
-│   ├── info_gatherer.py  # 搜索（SerpAPI / Google）
-│   ├── market_fetcher.py # 市场数据（Gamma API + 日期过滤）
-│   ├── price_fetcher.py  # 历史价格（CLOB API）
-│   ├── simulator.py      # 模拟交易（含手续费）
-│   ├── reporter.py       # 结果报告生成
-│   ├── config.py         # 配置加载 + 缓存
-│   ├── logger.py         # 日志配置
-│   └── types.py          # 数据类型定义
-├── runs/                 # 各次运行输出
-│   └── {model}-{timestamp}/
-│       ├── config.yaml   # 运行的完整配置
-│       ├── trace.jsonl   # Agent 完整交互记录
-│       ├── result.json   # 结果摘要
-│       └── manifest.json # 运行元信息
-├── data/                 # 缓存数据
-├── results/              # 旧版结果输出
-└── docs/                 # 设计文档
+│   ├── core/               # 可复用核心模块
+│   │   ├── agent.py        # Agent 循环 + system prompt
+│   │   ├── tools.py        # 工具定义 (search, bet, portfolio)
+│   │   ├── llm.py          # 多模型客户端 (OpenAI/Anthropic)
+│   │   ├── simulator.py    # 交易模拟 (含手续费)
+│   │   ├── market_data.py  # 市场数据 (Gamma API)
+│   │   ├── price_data.py   # 历史价格 (CLOB API)
+│   │   ├── search.py       # 搜索 (SerpAPI + 日期过滤)
+│   │   ├── config.py       # 配置 + .env 加载 + 缓存
+│   │   ├── tracer.py       # 运行追踪 (JSONL)
+│   │   ├── reporter.py     # 结果报告
+│   │   ├── logger.py       # 日志
+│   │   ├── types.py        # 数据类型
+│   │   └── kelly.py        # Kelly 公式
+│   └── backtest/           # 回测模块
+│       └── runner.py       # 月度回测编排器
+├── runs/                   # 各次运行输出
+├── docs/                   # 设计文档
+├── data/                   # 缓存
+└── .env.example            # 环境变量模板
 ```
 
-## 文档索引
+## 文档
 
 | 文件 | 内容 |
 |------|------|
-| [docs/0-architecture.md](docs/0-architecture.md) | 系统架构设计 |
+| [docs/0-architecture.md](docs/0-architecture.md) | 系统架构 |
 | [docs/1-requirements.md](docs/1-requirements.md) | 功能需求 & 设计决策 |
-| [docs/2-modules.md](docs/2-modules.md) | 各模块详细说明 |
-| [docs/3-usage.md](docs/3-usage.md) | 使用指南 & CLI 参数 |
-| [docs/4-status.md](docs/4-status.md) | 当前状态 & 待办事项 |
+| [docs/2-modules.md](docs/2-modules.md) | 模块说明 |
+| [docs/3-usage.md](docs/3-usage.md) | 使用指南 |
+| [docs/4-status.md](docs/4-status.md) | 当前状态 & 待办 |
