@@ -22,7 +22,7 @@ from src.core.reporter import save_report
 def parse_args():
     p = argparse.ArgumentParser(description="Polymarket Agent Backtest (legacy)")
     p.add_argument("--provider", default="openai", choices=["openai", "anthropic"])
-    p.add_argument("--model", default="deepseek-chat")
+    p.add_argument("--model", default="deepseek-v4-pro")
     p.add_argument("--api-key", default="")
     p.add_argument("--base-url", default="")
     p.add_argument("--start", default="")

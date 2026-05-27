@@ -5,7 +5,7 @@ api_keys:
   deepseek:
     key: "${DEEPSEEK_API_KEY}"
     base_url: "${DEEPSEEK_BASE_URL:-https://api.deepseek.com}"
-    model: "deepseek-chat"
+    model: "deepseek-v4-pro"
   tavily:
     key: "${TAVILY_API_KEY}"
   serpapi:

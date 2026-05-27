@@ -5,7 +5,9 @@ import logging
 import sys
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
+from datetime import datetime, timedelta
+
+from dateutil import parser as dateparser
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
@@ -31,7 +33,14 @@ NO 价格: {no_price}
 
 【关键要求：必须先搜索】
 在做任何判断之前，你必须至少调用一次 search_news 搜索相关背景信息。
-不了解事件来龙去脉就下注是盲目的。搜索结果可能为空，此时基于你的常识判断。
+不了解事件来龙去脉就下注是盲目的。
+如果搜索无结果，选择 SKIP 并给出理由（信息不足无法判断）。
+必须在 5 轮内调用 place_prediction 给出最终判断。
+
+【下注原则】
+- 只选近期结算（3 个月内）的市场，远期事件不确定性太大
+- 搜索无结果 → SKIP，不要硬猜
+- 有明确信息优势才下注，宁可保守
 
 【place_prediction 参数】
 - direction: "YES" | "NO" | "SKIP"
@@ -67,7 +76,8 @@ def _screen_markets(markets: list[dict], config: dict, llm_cfg: LLMConfig, capit
 选出你认为存在明显定价偏差的 5-10 个市场。判断标准：
 - YES 价格与你对事件概率的直觉明显不符
 - 你有相关领域知识可以评估
-- 跳过纯 50/50 随机市场
+- 优先选近期结算（3 个月内）的市场
+- 跳过纯 50/50 随机市场和远期事件
 
 直接输出 JSON 数组，仅包含 market slug：
 {{"selected": ["slug1", "slug2", ...], "reasoning": "一句话说明筛选逻辑"}}"""
@@ -131,6 +141,17 @@ def _fetch_active_markets(min_volume: float = 5000, limit: int = 20, cache: Cach
             vol = float(raw.get("volume", 0))
             if vol < min_volume:
                 continue
+
+            # Only include near-term markets (within 3 months)
+            end_date = raw.get("endDate", "")
+            if end_date:
+                try:
+                    end_dt = dateparser.parse(end_date)
+                    cutoff = datetime.now() + timedelta(days=90)
+                    if end_dt and end_dt > cutoff:
+                        continue
+                except Exception:
+                    pass
 
             all_markets.append({
                 "slug": raw.get("slug", ""),
@@ -222,7 +243,7 @@ def _analyze_market(market: dict, config: dict, llm_cfg: LLMConfig, capital: flo
         "search_queries": [],
     }
 
-    for turn in range(1, 8):
+    for turn in range(1, 6):  # max 5 turns
         try:
             content, tool_calls = client.chat(messages, tools, temperature=0.3, max_tokens=500)
         except Exception as e:
@@ -243,14 +264,22 @@ def _analyze_market(market: dict, config: dict, llm_cfg: LLMConfig, capital: flo
                 if func_name == "search_news":
                     query = func_args.get("query", "")
                     result["search_queries"].append(query)
-                    ctx_result = search_context(
-                        query=query, end_date=datetime.now().strftime("%Y-%m-%d"),
-                        serpapi_api_key=config["api_keys"]["serpapi"]["key"],
-                        max_results=3,
-                    )
-                    tool_result = ctx_result.summary[:2000] if ctx_result.summary else "(无结果)"
-                    log.debug("[%s] search '%s': %d chars",
-                              market["slug"][:20], query[:40], len(tool_result))
+
+                    # Use Tavily for real-time (SerpAPI rate limited)
+                    try:
+                        from tavily import TavilyClient
+                        client_t = TavilyClient(api_key=config["api_keys"]["tavily"]["key"])
+                        resp_t = client_t.search(query=query, search_depth="basic", max_results=3)
+                        articles = resp_t.get("results", [])
+                    except Exception:
+                        articles = []
+
+                    if articles:
+                        parts = [f"## {a.get('title','')}\n{a.get('content','')}" for a in articles]
+                        tool_result = "\n\n".join(parts)[:2000]
+                    else:
+                        tool_result = "(无搜索结果)"
+                    log.debug("[%s] search '%s': %d results", market["slug"][:20], query[:40], len(articles))
 
                 elif func_name == "place_prediction":
                     result["direction"] = func_args.get("direction", "SKIP")

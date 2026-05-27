@@ -98,7 +98,7 @@ def main():
     # backtest subcommand
     bt = sub.add_parser("backtest", help="Run historical backtest")
     bt.add_argument("--provider", default="openai", choices=["openai", "anthropic"])
-    bt.add_argument("--model", default="deepseek-chat")
+    bt.add_argument("--model", default="deepseek-v4-pro")
     bt.add_argument("--api-key", default="")
     bt.add_argument("--base-url", default="")
     bt.add_argument("--start", default="")
@@ -112,7 +112,7 @@ def main():
     # predict subcommand
     pr = sub.add_parser("predict", help="Real-time market predictions")
     pr.add_argument("--provider", default="openai", choices=["openai", "anthropic"])
-    pr.add_argument("--model", default="deepseek-chat")
+    pr.add_argument("--model", default="deepseek-v4-pro")
     pr.add_argument("--api-key", default="")
     pr.add_argument("--base-url", default="")
     pr.add_argument("--capital", type=float, default=1000)
