@@ -1,0 +1,40 @@
+# Polymarket Backtesting Configuration
+# Secrets live in .env — this file is safe to commit
+
+api_keys:
+  deepseek:
+    key: "${DEEPSEEK_API_KEY}"
+    base_url: "${DEEPSEEK_BASE_URL:-https://api.deepseek.com}"
+    model: "deepseek-chat"
+  tavily:
+    key: "${TAVILY_API_KEY}"
+  serpapi:
+    key: "${SERPAPI_API_KEY}"
+  serper:
+    key: ""
+
+search:
+  provider: "serpapi"  # serpapi (Google) or tavily
+
+backtest:
+  start_month: "2026-01"
+  end_month: "2026-04"
+  initial_capital: 1000  # USD
+  min_monthly_volume: 10000  # USD
+
+kelly:
+  fraction: 0.5
+  min_edge: 0.03
+  max_bet_pct: 0.25
+
+api:
+  gamma_base: "https://gamma-api.polymarket.com"
+  clob_base: "https://clob.polymarket.com"
+  request_delay: 0.3
+  page_limit: 100
+  max_pages: 8
+
+cache:
+  enabled: true
+  dir: "data/cache"
+  ttl_hours: 72

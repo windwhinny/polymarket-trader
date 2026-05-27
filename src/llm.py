@@ -1,0 +1,136 @@
+"""Multi-provider LLM client — OpenAI / Anthropic / DeepSeek compatible API."""
+import json
+import logging
+from typing import Optional
+from dataclasses import dataclass
+
+log = logging.getLogger("pm-backtest.llm")
+
+
+@dataclass
+class LLMConfig:
+    provider: str  # "openai" or "anthropic"
+    api_key: str
+    model: str
+    base_url: str = ""
+
+
+class LLMClient:
+    """Unified chat completion interface across providers."""
+
+    def __init__(self, cfg: LLMConfig):
+        self.cfg = cfg
+        if cfg.provider == "anthropic":
+            import anthropic
+            self._client = anthropic.Anthropic(api_key=cfg.api_key)
+        else:
+            from openai import OpenAI
+            url = cfg.base_url or "https://api.openai.com/v1"
+            self._client = OpenAI(api_key=cfg.api_key, base_url=url)
+
+    def chat(self, messages: list, tools: list, temperature: float = 0.3, max_tokens: int = 1000):
+        """Send chat request and return (content, tool_calls_list)."""
+        if self.cfg.provider == "anthropic":
+            return self._chat_anthropic(messages, tools, temperature, max_tokens)
+        else:
+            return self._chat_openai(messages, tools, temperature, max_tokens)
+
+    def _chat_openai(self, messages, tools, temperature, max_tokens):
+        response = self._client.chat.completions.create(
+            model=self.cfg.model,
+            messages=messages,
+            tools=tools if tools else None,
+            tool_choice="auto" if tools else None,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+        msg = response.choices[0].message
+        content = msg.content or ""
+
+        tool_calls = []
+        if msg.tool_calls:
+            for tc in msg.tool_calls:
+                try:
+                    args = json.loads(tc.function.arguments)
+                except json.JSONDecodeError:
+                    args = {}
+                tool_calls.append({
+                    "id": tc.id,
+                    "name": tc.function.name,
+                    "arguments": tc.function.arguments,
+                    "parsed_args": args,
+                })
+
+        return content, tool_calls
+
+    def _chat_anthropic(self, messages, tools, temperature, max_tokens):
+        system = ""
+        anthropic_msgs = []
+        for m in messages:
+            if m["role"] == "system":
+                system = m["content"]
+            elif m["role"] == "tool":
+                anthropic_msgs.append({
+                    "role": "user",
+                    "content": [{"type": "tool_result", "tool_use_id": m["tool_call_id"], "content": m["content"]}]
+                })
+            elif m["role"] == "assistant" and m.get("tool_calls"):
+                content_blocks = []
+                if m.get("content"):
+                    content_blocks.append({"type": "text", "text": m["content"]})
+                for tc in m["tool_calls"]:
+                    content_blocks.append({
+                        "type": "tool_use",
+                        "id": tc["id"],
+                        "name": tc["function"]["name"],
+                        "input": json.loads(tc["function"]["arguments"]),
+                    })
+                anthropic_msgs.append({"role": "assistant", "content": content_blocks})
+            else:
+                content = m.get("content", "")
+                if m["role"] == "assistant" and not content:
+                    continue
+                anthropic_msgs.append({"role": m["role"], "content": content})
+
+        if tools:
+            anthropic_tools = []
+            for t in tools:
+                func = t["function"]
+                anthropic_tools.append({
+                    "name": func["name"],
+                    "description": func.get("description", ""),
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {
+                            k: {"type": v.get("type", "string"), "description": v.get("description", "")}
+                            for k, v in func.get("parameters", {}).get("properties", {}).items()
+                        },
+                        "required": func.get("parameters", {}).get("required", []),
+                    }
+                })
+        else:
+            anthropic_tools = None
+
+        response = self._client.messages.create(
+            model=self.cfg.model,
+            system=system,
+            messages=anthropic_msgs,
+            tools=anthropic_tools,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+
+        content = ""
+        tool_calls = []
+        for block in response.content:
+            if block.type == "text":
+                content += block.text
+            elif block.type == "tool_use":
+                tool_calls.append({
+                    "id": block.id,
+                    "name": block.name,
+                    "arguments": json.dumps(block.input),
+                    "parsed_args": block.input,
+                })
+
+        return content, tool_calls

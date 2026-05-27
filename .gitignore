@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+
+# Virtual env
+venv/
+.env
+
+# IDE
+.vscode/
+.idea/
+
+# Cache & data (runtime artifacts, not source)
+data/cache/
+*.json
+
+# Run outputs
+runs/
+results/
+
+# Config with secrets (keep template only)
+config_test.yaml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
