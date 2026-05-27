@@ -29,10 +29,9 @@ NO 价格: {no_price}
 成交量: {volume}
 结算日期: {end_date}
 
-【你的任务】
-1. 可以调用 search_news 搜索相关信息（可选）
-2. 调用 get_market_detail 了解市场细节（如果需要）
-3. 最终调用 place_prediction 给出你的判断
+【关键要求：必须先搜索】
+在做任何判断之前，你必须至少调用一次 search_news 搜索相关背景信息。
+不了解事件来龙去脉就下注是盲目的。搜索结果可能为空，此时基于你的常识判断。
 
 【place_prediction 参数】
 - direction: "YES" | "NO" | "SKIP"
@@ -83,7 +82,10 @@ def _screen_markets(markets: list[dict], config: dict, llm_cfg: LLMConfig, capit
         return selected[:15]
     except Exception as e:
         log.error("Screen error: %s, analyzing all", e)
-        return [m["slug"] for m in markets[:10]](min_volume: float = 5000, limit: int = 20, cache: Cache = None) -> list[dict]:
+        return [m["slug"] for m in markets[:10]]
+
+
+def _fetch_active_markets(min_volume: float = 5000, limit: int = 20, cache: Cache = None) -> list[dict]:
     """Fetch currently active markets from Gamma API."""
     import requests
     import json as _json
