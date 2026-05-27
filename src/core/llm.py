@@ -28,22 +28,22 @@ class LLMClient:
             url = cfg.base_url or "https://api.openai.com/v1"
             self._client = OpenAI(api_key=cfg.api_key, base_url=url)
 
-    def chat(self, messages: list, tools: list, temperature: float = 0.3, max_tokens: int = 1000):
+    def chat(self, messages: list, tools: list):
         """Send chat request and return (content, tool_calls_list, reasoning_content)."""
         if self.cfg.provider == "anthropic":
-            return self._chat_anthropic(messages, tools, temperature, max_tokens)
+            return self._chat_anthropic(messages, tools)
         else:
-            return self._chat_openai(messages, tools, temperature, max_tokens)
+            return self._chat_openai(messages, tools)
 
-    def _chat_openai(self, messages, tools, temperature, max_tokens):
-        response = self._client.chat.completions.create(
-            model=self.cfg.model,
-            messages=messages,
-            tools=tools if tools else None,
-            tool_choice="auto" if tools else None,
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
+    def _chat_openai(self, messages, tools):
+        kwargs = {
+            "model": self.cfg.model,
+            "messages": messages,
+        }
+        if tools:
+            kwargs["tools"] = tools
+            kwargs["tool_choice"] = "auto"
+        response = self._client.chat.completions.create(**kwargs)
         msg = response.choices[0].message
         content = msg.content or ""
         reasoning = getattr(msg, "reasoning_content", "") or ""
@@ -64,7 +64,7 @@ class LLMClient:
 
         return content, tool_calls, reasoning
 
-    def _chat_anthropic(self, messages, tools, temperature, max_tokens):
+    def _chat_anthropic(self, messages, tools):
         system = ""
         anthropic_msgs = []
         for m in messages:
@@ -117,8 +117,6 @@ class LLMClient:
             system=system,
             messages=anthropic_msgs,
             tools=anthropic_tools,
-            max_tokens=max_tokens,
-            temperature=temperature,
         )
 
         content = ""

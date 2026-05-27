@@ -67,7 +67,7 @@ def _run_agent_traced(ctx: AgentContext, llm_cfg: LLMConfig, tracer: Tracer) -> 
         tracer.model_call(len(messages), llm_cfg.provider, llm_cfg.model, 0.3)
 
         try:
-            content, tool_calls, reasoning = client.chat(messages, tools, temperature=0.3, max_tokens=1000)
+            content, tool_calls, reasoning = client.chat(messages, tools)
         except Exception as e:
             log.error("API ERROR turn %d: %s", turn, e)
             tracer.error(str(e))

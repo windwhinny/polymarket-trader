@@ -84,7 +84,7 @@ def _screen_markets(markets: list[dict], config: dict, llm_cfg: LLMConfig, capit
 
     messages = [{"role": "user", "content": prompt}]
     try:
-        content, _, _ = client.chat(messages, [], temperature=0.2, max_tokens=500)
+        content, _, _ = client.chat(messages, [])
         result = json.loads(content) if isinstance(content, str) else content
         selected = result.get("selected", [])
         log.info("Screen: %d → %d selected | %s", len(markets), len(selected),
@@ -245,7 +245,7 @@ def _analyze_market(market: dict, config: dict, llm_cfg: LLMConfig, capital: flo
 
     for turn in range(1, 6):  # max 5 turns
         try:
-            content, tool_calls, reasoning = client.chat(messages, tools, temperature=0.3, max_tokens=500)
+            content, tool_calls, reasoning = client.chat(messages, tools)
         except Exception as e:
             log.error("[%s] API error turn %d: %s", market["slug"][:30], turn, e)
             result["reasoning"] = f"API error: {e}"
