@@ -131,7 +131,7 @@ def run_backtest(config: dict, llm_cfg: LLMConfig, run_dir: str, parallel: int =
 
     cache_dir = Path(config["cache"]["dir"])
     if not cache_dir.is_absolute():
-        cache_dir = Path(__file__).parent.parent / cache_dir
+        cache_dir = Path(__file__).parent.parent.parent / cache_dir  # backtest/runner.py → ../../
     cache = Cache(str(cache_dir), config["cache"]["ttl_hours"])
 
     sy, sm = map(int, config["backtest"]["start_month"].split("-"))
@@ -163,6 +163,21 @@ def run_backtest(config: dict, llm_cfg: LLMConfig, run_dir: str, parallel: int =
     for (y, m), valid in sorted(all_data.items()):
         ctx = AgentContext(y, m, capital, valid, config)
         ctx = _run_agent_traced(ctx, llm_cfg, tracer)
+
+        # Post-agent: settle all bets against known resolutions
+        from ..core.simulator import settle_bet
+        for bet in ctx.bets:
+            market = ctx.markets.get(bet.market_id)
+            if market is None:
+                # Try to find by slug
+                for mk in valid:
+                    if mk.id == bet.market_id:
+                        market = mk
+                        break
+            if market:
+                settle_bet(bet, market)
+                if bet.pnl is not None:
+                    ctx.capital += bet.amount + bet.pnl  # return stake + profit/loss
 
         settled = [b for b in ctx.bets if b.pnl is not None]
         report = MonthlyReport(

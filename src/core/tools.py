@@ -213,7 +213,7 @@ def _place_bet(slug: str, direction: str, amount: float, reasoning: str, ctx: Ag
             "your_capital": ctx.capital
         }, ensure_ascii=False)
 
-    from .simulator import simulate_bet, settle_bet, SPREAD_COST_RATE
+    from .simulator import simulate_bet, SPREAD_COST_RATE
 
     market_prob = market.outcome_prices[0] if market.outcome_prices else 0.5
     model_prob = market_prob + (0.08 if direction == "YES" else -0.08)
@@ -225,26 +225,25 @@ def _place_bet(slug: str, direction: str, amount: float, reasoning: str, ctx: Ag
         model_prob=model_prob, market_prob=market_prob,
         edge=edge, kelly_fraction=amount / ctx.capital, capital=ctx.capital,
     )
-    settle_bet(bet, market)
 
+    # Reserve capital — do NOT settle now (avoid look-ahead bias)
+    ctx.capital -= amount
+    bet.resolution = None
+    bet.pnl = None
     ctx.bets.append(bet)
 
-    if bet.pnl is not None:
-        ctx.capital += bet.pnl
     ctx.trade_log.append({
         "slug": slug, "direction": direction, "amount": amount,
-        "reasoning": reasoning, "pnl": bet.pnl, "resolution": bet.resolution
+        "reasoning": reasoning, "entry_price": bet.entry_price,
     })
 
-    result_word = "胜" if bet.pnl and bet.pnl > 0 else "负"
     return json.dumps({
         "status": "ok",
         "bet_placed": f"{direction} ${amount:.2f} on [{slug}]",
-        "resolution": bet.resolution,
-        "result": result_word,
-        "pnl": round(bet.pnl, 2) if bet.pnl else "pending",
-        "reasoning_recorded": reasoning,
+        "entry_price": round(bet.entry_price, 4),
+        "note": "下注已记录，结果将在月末结算后揭晓。",
         "remaining_capital": round(ctx.capital, 2),
+        "reasoning_recorded": reasoning,
     }, ensure_ascii=False)
 
 
