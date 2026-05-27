@@ -10,7 +10,7 @@ from typing import Optional
 
 def _load_dotenv() -> None:
     """Load .env file into os.environ. Does NOT override existing env vars."""
-    env_path = Path(__file__).parent.parent / ".env"
+    env_path = Path(__file__).parent.parent.parent / ".env"  # config.py → ../../ = project root
     if not env_path.exists():
         return
     with open(env_path) as f:

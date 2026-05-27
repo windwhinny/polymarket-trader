@@ -60,6 +60,37 @@ def cmd_backtest(args):
     save_report(result, run_dir)
 
 
+def cmd_predict(args):
+    """Run real-time market predictions."""
+    from src.core.logger import setup_logger
+    from src.core.config import load_config
+    from src.core.llm import LLMConfig
+    from src.predict.runner import run_predict
+    from src.core.tracer import create_run_id
+
+    log = setup_logger("pm-trader")
+    config = load_config()
+
+    api_keys = config.get("api_keys", {})
+    provider_keys = api_keys.get("deepseek", {})
+
+    if args.provider == "anthropic":
+        api_key = args.api_key or os.environ.get("ANTHROPIC_API_KEY", "")
+        base_url = ""
+    else:
+        api_key = args.api_key or provider_keys.get("key", "")
+        base_url = args.base_url or provider_keys.get("base_url", "")
+
+    llm_cfg = LLMConfig(provider=args.provider, api_key=api_key, model=args.model, base_url=base_url)
+    run_id = args.run_id or create_run_id("predict")
+    output_dir = args.output or f"runs/{run_id}"
+    log.info("Output: %s", output_dir)
+
+    run_predict(config, llm_cfg, output_dir,
+                capital=args.capital,
+                min_volume=args.min_volume, parallel=args.parallel)
+
+
 def main():
     p = argparse.ArgumentParser(description="Polymarket AI Trader")
     sub = p.add_subparsers(dest="mode", required=True)
@@ -78,6 +109,18 @@ def main():
     bt.add_argument("--run-id", default="")
     bt.add_argument("--output", default="")
 
+    # predict subcommand
+    pr = sub.add_parser("predict", help="Real-time market predictions")
+    pr.add_argument("--provider", default="openai", choices=["openai", "anthropic"])
+    pr.add_argument("--model", default="deepseek-chat")
+    pr.add_argument("--api-key", default="")
+    pr.add_argument("--base-url", default="")
+    pr.add_argument("--capital", type=float, default=1000)
+    pr.add_argument("--min-volume", type=float, default=10000)
+    pr.add_argument("--parallel", type=int, default=5)
+    pr.add_argument("--run-id", default="")
+    pr.add_argument("--output", default="")
+
     # trade subcommand (future)
     tr = sub.add_parser("trade", help="Live trading (coming soon)")
     tr.add_argument("--dry-run", action="store_true", help="Simulation mode")
@@ -86,8 +129,10 @@ def main():
 
     if args.mode == "backtest":
         cmd_backtest(args)
+    elif args.mode == "predict":
+        cmd_predict(args)
     elif args.mode == "trade":
-        print("Live trading mode not implemented yet. Use 'backtest' for now.")
+        print("Live trading mode not implemented yet.")
         sys.exit(1)
 
 
