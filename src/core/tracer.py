@@ -48,7 +48,7 @@ class Tracer:
                      "provider": provider, "model": model, "temperature": temperature})
 
     def model_response(self, content: str, tool_calls: list):
-        self._write({"type": "model_response", "content": content[:500],
+        self._write({"type": "model_response", "content": content,
                      "tool_calls": [{"name": tc["name"], "args": tc.get("parsed_args", tc.get("arguments", ""))}
                                     for tc in tool_calls]})
 
@@ -56,14 +56,14 @@ class Tracer:
         self._write({"type": "tool_call", "name": name, "args": args})
 
     def tool_result(self, name: str, result: str):
-        self._write({"type": "tool_result", "name": name, "result": result[:500]})
+        self._write({"type": "tool_result", "name": name, "result": result})
 
     def bet(self, month: str, direction: str, amount: float, slug: str, pnl: float, resolution: str, reasoning: str):
         data = {
             "type": "bet",
             "month": month, "direction": direction, "amount": amount,
             "slug": slug, "pnl": pnl, "resolution": resolution,
-            "reasoning": reasoning[:300],
+            "reasoning": reasoning,
         }
         self._write(data)
         self.bf.write(json.dumps(data, ensure_ascii=False) + "\n")
@@ -71,7 +71,7 @@ class Tracer:
 
     def finish(self, month: str, capital: float, summary: str, decisions: str):
         self._write({"type": "finish", "month": month, "final_capital": capital,
-                     "summary": summary[:300], "decisions": decisions[:300]})
+                     "summary": summary, "decisions": decisions})
 
     def error(self, error: str):
         self._write({"type": "error", "error": error})

@@ -181,7 +181,7 @@ def _analyze_market(market: dict, config: dict, llm_cfg: LLMConfig, capital: flo
     """Run prediction agent for a single market. Returns recommendation dict."""
     client = LLMClient(llm_cfg)
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
-    question = market["question"][:200]
+    question = market["question"]
 
     system_msg = PREDICT_PROMPT.format(
         now=now,
@@ -279,7 +279,7 @@ def _analyze_market(market: dict, config: dict, llm_cfg: LLMConfig, capital: flo
 
                     if articles:
                         parts = [f"## {a.get('title','')}\n{a.get('content','')}" for a in articles]
-                        tool_result = "\n\n".join(parts)[:3000]
+                        tool_result = "\n\n".join(parts)
                     else:
                         tool_result = "(无搜索结果)"
                     log.debug("[%s] search '%s': %d results", market["slug"][:20], query[:40], len(articles))
@@ -320,7 +320,7 @@ def _analyze_market(market: dict, config: dict, llm_cfg: LLMConfig, capital: flo
             if reasoning:
                 assistant_msg["reasoning_content"] = reasoning
             messages.append(assistant_msg)
-            result["reasoning"] = content[:200]  # capture last thinking as fallback
+            result["reasoning"] = content
 
     if result["direction"] == "SKIP" and not result["reasoning"]:
         result["reasoning"] = "(分析超时)"
@@ -402,7 +402,7 @@ def _save_report(results: list, capital: float, out_dir: Path, llm_cfg: LLMConfi
             slug_short = b["slug"][:45]
             lines.append(
                 f"| {i} | **{b['direction']}** | ${b['amount']:.0f} | {b['confidence']} "
-                f"| {b['yes_price']:.1%} | {slug_short} | {b['reasoning'][:80]} |"
+                f"| {b['yes_price']:.1%} | {slug_short} | {b['reasoning']} |"
             )
     else:
         lines.append("*(无下注建议)*")

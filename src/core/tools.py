@@ -38,7 +38,7 @@ class AgentContext:
         lines = []
         for slug, m in self.markets.items():
             yes_price = m.outcome_prices[0] if m.outcome_prices else "?"
-            lines.append(f"  [{slug}] {m.question[:80]} | YES={yes_price} | vol=${m.volume:,.0f}")
+            lines.append(f"  [{slug}] {m.question} | YES={yes_price} | vol=${m.volume:,.0f}")
         return "\n".join(lines)
 
 
@@ -168,7 +168,7 @@ def _search_news(query: str, ctx: AgentContext) -> str:
     for r in result.results:
         response["articles"].append({
             "title": r.get("title", ""),
-            "snippet": r.get("snippet", "")[:300],
+                "snippet": r.get("snippet", ""),
             "date": r.get("date", ""),
             "source": r.get("link", ""),
         })

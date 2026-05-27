@@ -159,7 +159,7 @@ def search_context(
                 query=sq,
                 end_date=end_date,
                 results=filtered,
-                summary=summary[:3000],
+                summary=summary,
             )
 
             if cache:
