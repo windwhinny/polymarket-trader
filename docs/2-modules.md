@@ -1,11 +1,11 @@
 # 模块说明
 
-## Agent 层
+## Agent 层 (`src/core/`)
 
-### `agent_loop.py`
-Agent 工具调用循环 + 系统 prompt 模板。定义了 Agent 的角色、时间约束、市场列表、交易规则、风险管理要求。
+### `core/agent.py` — Agent 循环
+工具调用循环 + 系统 prompt 模板。定义 Agent 角色、时间约束、市场列表、交易规则、风险管理要求。
 
-### `agent_tools.py`
+### `core/tools.py` — 工具定义
 Agent 可用的 5 个工具：
 
 | 工具 | 用途 | 时间约束 |
@@ -16,64 +16,46 @@ Agent 可用的 5 个工具：
 | `get_portfolio()` | 查看资金/持仓 | 实时 |
 | `finish_trading(summary, decisions)` | 结束本月 | — |
 
-### `llm.py`
-多模型统一客户端，支持：
-- **openai** 格式: DeepSeek, GPT-4o, 任何 /v1 兼容 API
-- **anthropic** 格式: Claude 系列
+### `core/llm.py` — 多模型客户端
+支持 OpenAI / Anthropic 格式，自动转换消息和 tool definitions。
 
-自动转换消息格式和 tool definitions。
+## 数据层 (`src/core/`)
 
-## 数据层
-
-### `info_gatherer.py`
-搜索模块，当前实现：
-- SerpAPI (Google): 支持 `tbs` 日期过滤 + 文章级日期后过滤
+### `core/search.py` — 搜索引擎
+- SerpAPI (Google): `tbs` 参数 + 文章级 `_filter_by_date()` 双重日期过滤
 - `_parse_article_date()`: 解析 "Jan 15, 2026" / "2 days ago" 等格式
-- `_filter_by_date()`: 过滤 cutoff 之后的文章
 
-### `market_fetcher.py`
+### `core/market_data.py` — 市场数据
 Polymarket Gamma API:
-- 拉取已结算市场 (`closed=true`)
-- 按成交量排序，分页获取
-- 日期过滤: `endDate > month_end`
-- 成交量过滤: `volume >= min_volume`
+- `fetch_markets()`: 拉取已结算市场，按 `endDate > month_end` 过滤 + 成交量过滤
 
-### `price_fetcher.py`
+### `core/price_data.py` — 历史价格
 Polymarket CLOB API:
-- `/prices-history`: 获取 token 历史价格
-- 查找最接近目标时间戳的价格数据点
+- `fetch_prices_at_month_end()`: 拉取多个 token 的历史价格，按时间戳匹配
 
-## 交易层
+## 交易层 (`src/core/`)
 
-### `simulator.py`
-模拟交易引擎：
-- Taker fee: 0.01%
-- Spread cost: 1%
-- Gas: $0.005
-- DEMAND 公式: `entry_price = market_prob * (1 + spread)` for YES, `(1-market_prob) * (1 + spread)` for NO
+### `core/simulator.py` — 交易引擎
+- Taker fee: 0.01% | Spread cost: 1% | Gas: $0.005
 - 赢: P&L = shares × 1.0 - amount - fees
 - 输: P&L = -(amount + fees)
 
-### `kelly.py`
-Kelly 公式（Agent 模式下未直接使用，Agent 自行决策仓位）:
-- YES: f = (p - m) / (1 - m)
-- NO: f = (m - p) / m
+### `core/kelly.py` — Kelly 公式
+Agent 模式下 Agent 自行决策仓位，此模块为参考实现。
 
-## 基础设施
+## 基础设施 (`src/core/`)
 
-### `tracer.py`
-运行追踪系统：
-- `trace.jsonl`: 每步 Agent 交互记录
-- `bets.jsonl`: 下注记录
-- `config.yaml`: 运行配置快照
-- `result.json`: 最终结果
-- `manifest.json`: 运行元信息
+### `core/tracer.py` — 运行追踪
+每次运行保存: `trace.jsonl`, `bets.jsonl`, `config.yaml`, `result.json`, `manifest.json`
 
-### `runner.py`
-回测编排器：
+### `core/config.py` — 配置管理
+YAML 加载 + `.env` 读取 + `${VAR}` 展开 + 文件缓存
+
+## 回测层 (`src/backtest/`)
+
+### `backtest/runner.py` — 回测编排器
 - Phase 1: 并行拉取所有月份的市场数据
-- Phase 2: 串行执行 Agent（资金复利）
-- 集成 tracer 记录全流程
+- Phase 2: 串行执行 Agent（资金复利），集成 tracer 记录全流程
 
-### `reporter.py`
-结果报告：月报/年报 P&L、Sharpe 比率、最大回撤。
+### `core/reporter.py` — 报告生成
+月报/年报 P&L、Sharpe 比率、最大回撤。
