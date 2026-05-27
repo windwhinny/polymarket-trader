@@ -120,8 +120,8 @@ def search_context(
                 log.debug("CACHE HIT | serpapi='%s'", sq[:60])
                 return SearchContext(**cached)
 
-        tbs = f"cdr:1,cd_min:{_fmt_tbs_date(start_date)},cd_max:{_fmt_tbs_date(end_date)}"
-        log.info("SERPAPI | '%s' | %s ~ %s", sq[:80], start_date, end_date)
+        # tbs date filter at API level — often too restrictive, rely on _filter_by_date instead
+        log.info("SERPAPI | '%s' | cutoff=%s", sq[:80], end_date)
 
         try:
             proxies = None
@@ -131,8 +131,7 @@ def search_context(
                     "api_key": serpapi_api_key,
                     "engine": "google",
                     "q": sq,
-                    "num": max_results,
-                    "tbs": tbs,
+                    "num": max_results * 2,  # fetch more, filter by date later
                 }, proxies=proxies, timeout=15)
             resp.raise_for_status()
             data = resp.json()

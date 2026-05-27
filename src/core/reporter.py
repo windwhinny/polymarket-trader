@@ -112,7 +112,9 @@ def save_report(result: BacktestResult, output_dir: str):
     print("\n" + "=" * 60)
     print(" POLYMARKET BACKTEST RESULTS")
     print("=" * 60)
-    print(f" Period: 2025-01 ~ 2025-12")
+    first_month = result.months[0].month if result.months else "?"
+    last_month = result.months[-1].month if result.months else "?"
+    print(f" Period: {first_month} ~ {last_month}")
     print(f" Initial Capital: ${result.months[0].starting_capital:,.2f}" if result.months else "")
     print(f" Final Capital:   ${result.months[-1].ending_capital:,.2f}" if result.months else "")
     print(f" Total P&L:       ${result.total_pnl:,.2f}")
