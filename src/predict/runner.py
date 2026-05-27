@@ -147,8 +147,11 @@ def _fetch_active_markets(min_volume: float = 5000, limit: int = 20, cache: Cach
             if end_date:
                 try:
                     end_dt = dateparser.parse(end_date)
-                    cutoff = datetime.now() + timedelta(days=90)
-                    if end_dt and end_dt > cutoff:
+                    if end_dt is None:
+                        pass
+                    elif end_dt.tzinfo is not None:
+                        end_dt = end_dt.replace(tzinfo=None)
+                    if end_dt and end_dt > datetime.now() + timedelta(days=90):
                         continue
                 except Exception:
                     pass
