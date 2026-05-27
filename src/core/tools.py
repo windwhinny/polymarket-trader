@@ -9,14 +9,21 @@ log = logging.getLogger("pm-backtest.agent")
 
 
 class AgentContext:
-    """Mutable state for the agent during a month's trading session."""
+    """Mutable state for the agent during a month's trading session.
+
+    Cash accounting:
+      starting_capital — month-open equity (fixed; basis for risk limits)
+      available_cash   — unallocated cash; decreases as bets are placed
+      total_equity     — available_cash + sum(open bet stakes) + settled P&L;
+                         this is what an external observer would call "capital"
+    """
 
     def __init__(self, year: int, month: int, capital: float, markets: list, config: dict):
         self.year = year
         self.month = month
         self.month_key = f"{year}-{month:02d}"
-        self.capital = capital
         self.starting_capital = capital
+        self.available_cash = capital
         self.markets = {m.slug: m for m in markets}
         self.bets = []
         self.trade_log = []
@@ -31,6 +38,18 @@ class AgentContext:
         self.cutoff_date = self.cutoff.strftime("%Y-%m-%d")
 
     @property
+    def total_equity(self) -> float:
+        """Cash + open stakes + settled P&L. Equals starting_capital + total realized P&L."""
+        open_stakes = sum(b.amount for b in self.bets if b.pnl is None)
+        realized = sum(b.pnl for b in self.bets if b.pnl is not None)
+        return self.available_cash + open_stakes + realized
+
+    # Back-compat: many call sites still read ctx.capital
+    @property
+    def capital(self) -> float:
+        return self.total_equity
+
+    @property
     def available_slugs(self):
         return list(self.markets.keys())
 
@@ -38,7 +57,8 @@ class AgentContext:
         lines = []
         for slug, m in self.markets.items():
             yes_price = m.outcome_prices[0] if m.outcome_prices else "?"
-            lines.append(f"  [{slug}] {m.question} | YES={yes_price} | vol=${m.volume:,.0f}")
+            end = (m.end_date or "")[:10]
+            lines.append(f"  [{slug}] {m.question} | YES={yes_price} | vol=${m.volume:,.0f} | end={end}")
         return "\n".join(lines)
 
 
@@ -117,7 +137,7 @@ def build_tools() -> list[dict]:
 
 def execute_tool(name: str, args: dict, ctx: AgentContext) -> str:
     """Execute a tool call and return the result as a JSON string."""
-    log.info("TOOL | %s | args=%s", name, json.dumps(args, ensure_ascii=False)[:200])
+    log.info("TOOL | %s | args=%s", name, json.dumps(args, ensure_ascii=False))
 
     if name == "search_news":
         return _search_news(args["query"], ctx)

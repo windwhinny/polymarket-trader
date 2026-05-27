@@ -63,7 +63,7 @@ def _screen_markets(markets: list[dict], config: dict, llm_cfg: LLMConfig, capit
     # Build compact market list
     market_lines = []
     for i, m in enumerate(markets):
-        q = m["question"][:80]
+        q = m["question"]
         market_lines.append(
             f"{i+1}. [{m['slug']}] YES={m['yes_price']:.1%} | vol=${m['volume']:,.0f} | {q}"
         )
@@ -399,7 +399,7 @@ def _save_report(results: list, capital: float, out_dir: Path, llm_cfg: LLMConfi
         lines.append(f"| # | 方向 | 金额 | 置信度 | YES价格 | 市场 | 理由 |")
         lines.append(f"|---|------|------|--------|--------|------|------|")
         for i, b in enumerate(bets, 1):
-            slug_short = b["slug"][:45]
+            slug_short = b["slug"]
             lines.append(
                 f"| {i} | **{b['direction']}** | ${b['amount']:.0f} | {b['confidence']} "
                 f"| {b['yes_price']:.1%} | {slug_short} | {b['reasoning']} |"
@@ -414,7 +414,7 @@ def _save_report(results: list, capital: float, out_dir: Path, llm_cfg: LLMConfi
     ]
     if skips:
         for b in skips:
-            lines.append(f"- [{b['slug'][:60]}]({b['yes_price']:.1%}) — {b.get('reasoning','')[:80]}")
+            lines.append(f"- [{b['slug']}]({b['yes_price']:.1%}) — {b.get('reasoning','')}")
     else:
         lines.append("*(全部市场均有下注建议)*")
 
