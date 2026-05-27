@@ -4,19 +4,19 @@
 
 ```
 ┌─────────────────────────────────────────────┐
-│              run_agent.py (CLI)              │  ← 命令行入口
+│              trader.py (CLI)                 │  ← 命令行入口
 ├─────────────────────────────────────────────┤
-│            runner.py (编排器)                 │  ← 回测编排 + trace
+│            backtest/runner.py (编排器)        │  ← 回测编排 + trace
 ├──────────────┬──────────────┬────────────────┤
-│ agent_loop   │ agent_tools   │ llm.py        │  ← Agent 层
+│ core/agent   │ core/tools    │ core/llm.py   │  ← Agent 层
 │ (工具调用循环)│ (工具定义)     │ (多模型)       │
 ├──────────────┼──────────────┼────────────────┤
-│ info_gatherer│ market_fetcher│ price_fetcher  │  ← 数据层
-│ (搜索)        │ (市场数据)     │ (历史价格)     │
+│ core/search  │ core/market   │ core/price    │  ← 数据层
+│ (搜索)        │ _data (市场)   │ _data (价格)   │
 ├──────────────┴──────────────┴────────────────┤
-│  simulator.py (交易模拟)  |  tracer.py (追踪) │  ← 横切层
+│ core/simulator.py (交易) | core/tracer.py    │  ← 横切层
 ├─────────────────────────────────────────────┤
-│  config.py / logger.py / types.py            │  ← 基础设施
+│ core/config.py / core/logger.py / core/types │  ← 基础设施
 └─────────────────────────────────────────────┘
 ```
 
