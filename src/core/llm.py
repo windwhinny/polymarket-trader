@@ -39,6 +39,7 @@ class LLMClient:
         kwargs = {
             "model": self.cfg.model,
             "messages": messages,
+            "timeout": 120,
         }
         if tools:
             kwargs["tools"] = tools

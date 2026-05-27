@@ -35,7 +35,7 @@ NO 价格: {no_price}
 在做任何判断之前，你必须至少调用一次 search_news 搜索相关背景信息。
 不了解事件来龙去脉就下注是盲目的。
 如果搜索无结果，选择 SKIP 并给出理由（信息不足无法判断）。
-必须在 5 轮内调用 place_prediction 给出最终判断。
+必须在 3 轮内完成：第 1 轮搜索新闻，第 2 轮分析，第 3 轮调用 place_prediction。不要反复搜索。
 
 【下注原则】
 - 只选近期结算（3 个月内）的市场，远期事件不确定性太大
@@ -272,14 +272,14 @@ def _analyze_market(market: dict, config: dict, llm_cfg: LLMConfig, capital: flo
                     try:
                         from tavily import TavilyClient
                         client_t = TavilyClient(api_key=config["api_keys"]["tavily"]["key"])
-                        resp_t = client_t.search(query=query, search_depth="basic", max_results=3)
+                        resp_t = client_t.search(query=query, search_depth="basic", max_results=5)
                         articles = resp_t.get("results", [])
                     except Exception:
                         articles = []
 
                     if articles:
                         parts = [f"## {a.get('title','')}\n{a.get('content','')}" for a in articles]
-                        tool_result = "\n\n".join(parts)[:2000]
+                        tool_result = "\n\n".join(parts)[:3000]
                     else:
                         tool_result = "(无搜索结果)"
                     log.debug("[%s] search '%s': %d results", market["slug"][:20], query[:40], len(articles))
@@ -320,6 +320,10 @@ def _analyze_market(market: dict, config: dict, llm_cfg: LLMConfig, capital: flo
             if reasoning:
                 assistant_msg["reasoning_content"] = reasoning
             messages.append(assistant_msg)
+            result["reasoning"] = content[:200]  # capture last thinking as fallback
+
+    if result["direction"] == "SKIP" and not result["reasoning"]:
+        result["reasoning"] = "(分析超时)"
 
     return result
 
