@@ -17,10 +17,16 @@ log = logging.getLogger("pm-backtest.info")
 SERPAPI_BASE = "https://serpapi.com/search"
 
 
-def _parse_article_date(date_str: str) -> Optional[datetime]:
-    """Parse a SerpAPI date string like 'Jan 15, 2026' or '2 days ago'."""
+def _parse_article_date(date_str: str, now: Optional[datetime] = None) -> Optional[datetime]:
+    """Parse a SerpAPI date string like 'Jan 15, 2026' or '2 days ago'.
+
+    `now` controls the reference point for relative dates. In backtests this
+    must be the search cutoff, not real wall-clock time, otherwise "2 days ago"
+    leaks future articles into the historical window.
+    """
     if not date_str:
         return None
+    ref = now or datetime.now()
     try:
         # Handle relative dates (e.g. "2 days ago")
         if "ago" in date_str.lower():
@@ -28,13 +34,13 @@ def _parse_article_date(date_str: str) -> Optional[datetime]:
             if match:
                 n = int(match.group(1))
                 unit = match.group(2)
-                if unit.startswith('day'): return datetime.now() - timedelta(days=n)
-                if unit.startswith('week'): return datetime.now() - timedelta(weeks=n)
-                if unit.startswith('month'): return datetime.now() - timedelta(days=n * 30)
-                if unit.startswith('year'): return datetime.now() - timedelta(days=n * 365)
-                if unit.startswith('hour'): return datetime.now() - timedelta(hours=n)
-                if unit.startswith('minute'): return datetime.now() - timedelta(minutes=n)
-            return datetime.now()
+                if unit.startswith('day'): return ref - timedelta(days=n)
+                if unit.startswith('week'): return ref - timedelta(weeks=n)
+                if unit.startswith('month'): return ref - timedelta(days=n * 30)
+                if unit.startswith('year'): return ref - timedelta(days=n * 365)
+                if unit.startswith('hour'): return ref - timedelta(hours=n)
+                if unit.startswith('minute'): return ref - timedelta(minutes=n)
+            return ref
 
         return dateparser.parse(date_str)
     except Exception:
@@ -47,7 +53,7 @@ def _filter_by_date(articles: list, cutoff_dt: datetime) -> tuple[list, int]:
     skipped = 0
     for a in articles:
         date_str = a.get("date", "")
-        pub_dt = _parse_article_date(date_str)
+        pub_dt = _parse_article_date(date_str, now=cutoff_dt)
         if pub_dt is None:
             # No date → include (can't prove it's after cutoff)
             filtered.append(a)

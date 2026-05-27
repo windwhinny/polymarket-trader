@@ -114,11 +114,11 @@ def _run_agent_traced(ctx: AgentContext, llm_cfg: LLMConfig, tracer: Tracer) -> 
                 })
 
                 if func_name == "finish_trading":
-                    tracer.finish(ctx.month_key, ctx.capital,
+                    tracer.finish(ctx.month_key, ctx.total_equity,
                                   func_args.get("strategy_summary", ""),
                                   func_args.get("key_decisions", ""))
-                    log.info("AGENT DONE | %s | %d bets | $%.2f→$%.2f",
-                             ctx.month_key, len(ctx.bets), ctx.starting_capital, ctx.capital)
+                    log.info("AGENT DONE | %s | %d bets | $%.2f→$%.2f (pre-settle)",
+                             ctx.month_key, len(ctx.bets), ctx.starting_capital, ctx.total_equity)
                     return ctx
 
         elif content:
@@ -170,12 +170,13 @@ def run_backtest(config: dict, llm_cfg: LLMConfig, run_dir: str, parallel: int =
         ctx = AgentContext(y, m, capital, valid, config)
         ctx = _run_agent_traced(ctx, llm_cfg, tracer)
 
-        # Post-agent: settle all bets against known resolutions
+        # Post-agent: settle all bets against known resolutions.
+        # available_cash already had each stake removed when the bet was placed,
+        # so we add back stake + pnl per settled bet to recover ending equity.
         from ..core.simulator import settle_bet
         for bet in ctx.bets:
             market = ctx.markets.get(bet.market_id)
             if market is None:
-                # Try to find by slug
                 for mk in valid:
                     if mk.id == bet.market_id:
                         market = mk
@@ -183,7 +184,9 @@ def run_backtest(config: dict, llm_cfg: LLMConfig, run_dir: str, parallel: int =
             if market:
                 settle_bet(bet, market)
                 if bet.pnl is not None:
-                    ctx.capital += bet.amount + bet.pnl  # return stake + profit/loss
+                    ctx.available_cash += bet.amount + bet.pnl
+
+        ending_capital = ctx.available_cash  # all stakes returned (or zeroed)
 
         settled = [b for b in ctx.bets if b.pnl is not None]
         report = MonthlyReport(
@@ -194,13 +197,13 @@ def run_backtest(config: dict, llm_cfg: LLMConfig, run_dir: str, parallel: int =
             unresolved=len([b for b in ctx.bets if b.pnl is None]),
             win_rate=len([b for b in settled if b.pnl > 0]) / len(settled) if settled else 0,
             total_bet_amount=sum(b.amount for b in ctx.bets),
-            total_pnl=ctx.capital - capital,
+            total_pnl=ending_capital - capital,
             starting_capital=capital,
-            ending_capital=ctx.capital,
-            roi=(ctx.capital - capital) / capital if capital > 0 else 0,
+            ending_capital=ending_capital,
+            roi=(ending_capital - capital) / capital if capital > 0 else 0,
             bets=ctx.bets,
         )
-        capital = ctx.capital
+        capital = ending_capital
         monthly_reports.append(report)
 
     result = generate_final_report(monthly_reports, config["backtest"]["initial_capital"])

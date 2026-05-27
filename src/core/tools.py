@@ -96,16 +96,20 @@ def build_tools() -> list[dict]:
             "type": "function",
             "function": {
                 "name": "place_bet",
-                "description": "在预测市场上下注。请基于你的分析做出决策，说明下注理由。每次只下一个注。",
+                "description": "在预测市场上下注。每次只下一个注。amount 不能超过 starting_capital 的 15%。",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "slug": {"type": "string", "description": "市场 slug"},
                         "direction": {"type": "string", "enum": ["YES", "NO"]},
-                        "amount": {"type": "number", "description": "下注金额（美元），建议不超过总资金的 25%"},
+                        "amount": {"type": "number", "description": "下注金额（美元），不超过起始资金 15%"},
+                        "model_prob": {
+                            "type": "number",
+                            "description": "你估计的 YES 真实概率（0-1）。和市场 YES 价格的差就是你认为的 edge。"
+                        },
                         "reasoning": {"type": "string", "description": "下注理由（1-2句话）"}
                     },
-                    "required": ["slug", "direction", "amount", "reasoning"]
+                    "required": ["slug", "direction", "amount", "model_prob", "reasoning"]
                 }
             }
         },
@@ -146,7 +150,11 @@ def execute_tool(name: str, args: dict, ctx: AgentContext) -> str:
         return _get_market_detail(args["slug"], ctx)
 
     elif name == "place_bet":
-        return _place_bet(args["slug"], args["direction"], args["amount"], args.get("reasoning", ""), ctx)
+        return _place_bet(
+            args["slug"], args["direction"], args["amount"],
+            args.get("model_prob"),
+            args.get("reasoning", ""), ctx,
+        )
 
     elif name == "get_portfolio":
         return _get_portfolio(ctx)
@@ -213,7 +221,8 @@ def _get_market_detail(slug: str, ctx: AgentContext) -> str:
     }, ensure_ascii=False)
 
 
-def _place_bet(slug: str, direction: str, amount: float, reasoning: str, ctx: AgentContext) -> str:
+def _place_bet(slug: str, direction: str, amount: float,
+               model_prob: Optional[float], reasoning: str, ctx: AgentContext) -> str:
     market = ctx.markets.get(slug)
     if not market:
         return json.dumps({"error": f"未找到市场: {slug}"}, ensure_ascii=False)
@@ -221,39 +230,55 @@ def _place_bet(slug: str, direction: str, amount: float, reasoning: str, ctx: Ag
     if amount <= 0:
         return json.dumps({"error": "下注金额必须大于 0"}, ensure_ascii=False)
 
-    if amount > ctx.capital * 0.15:
+    # Risk limit is anchored to month-open equity, not the dwindling cash balance,
+    # so the agent can place its planned 5-laid spread without the cap shrinking each turn.
+    max_per_bet = ctx.starting_capital * 0.15
+    if amount > max_per_bet:
         return json.dumps({
-            "error": f"单笔下注不能超过总资金的 15% (${ctx.capital * 0.15:.0f})。请降低金额，分散到更多市场。",
-            "your_capital": ctx.capital
+            "error": f"单笔下注不能超过起始资金的 15% (${max_per_bet:.0f})。请降低金额，分散到更多市场。",
+            "starting_capital": ctx.starting_capital,
+            "available_cash": round(ctx.available_cash, 2),
         }, ensure_ascii=False)
 
-    if amount > ctx.capital:
+    if amount > ctx.available_cash:
         return json.dumps({
-            "error": f"资金不足！你只有 ${ctx.capital:.2f}，但想下注 ${amount:.2f}",
-            "your_capital": ctx.capital
+            "error": f"现金不足！可用现金 ${ctx.available_cash:.2f}，但想下注 ${amount:.2f}",
+            "available_cash": round(ctx.available_cash, 2),
+            "starting_capital": ctx.starting_capital,
         }, ensure_ascii=False)
 
-    from .simulator import simulate_bet, SPREAD_COST_RATE
+    from .simulator import simulate_bet
 
     market_prob = market.outcome_prices[0] if market.outcome_prices else 0.5
-    model_prob = market_prob + (0.08 if direction == "YES" else -0.08)
-    model_prob = max(0.01, min(0.99, model_prob))
-    edge = abs(model_prob - market_prob)
+
+    # model_prob is now supplied by the agent (probability of YES). Fall back to
+    # the market price (zero edge) if missing or out of range.
+    if model_prob is None or not (0.0 < model_prob < 1.0):
+        model_prob = market_prob
+    model_prob = max(0.01, min(0.99, float(model_prob)))
+
+    # Edge in the direction of the bet: positive when the agent thinks the bet is +EV.
+    if direction == "YES":
+        edge = model_prob - market_prob
+    else:
+        edge = (1 - model_prob) - (1 - market_prob)  # = market_prob - model_prob
 
     bet = simulate_bet(
         market=market, month=ctx.month_key, direction=direction,
         model_prob=model_prob, market_prob=market_prob,
-        edge=edge, kelly_fraction=amount / ctx.capital, capital=ctx.capital,
+        edge=edge,
+        kelly_fraction=amount / ctx.starting_capital,
+        capital=ctx.starting_capital,
     )
 
-    # Reserve capital — do NOT settle now (avoid look-ahead bias)
-    ctx.capital -= amount
+    ctx.available_cash -= amount
     bet.resolution = None
     bet.pnl = None
     ctx.bets.append(bet)
 
     ctx.trade_log.append({
         "slug": slug, "direction": direction, "amount": amount,
+        "model_prob": model_prob, "edge": edge,
         "reasoning": reasoning, "entry_price": bet.entry_price,
     })
 
@@ -261,8 +286,12 @@ def _place_bet(slug: str, direction: str, amount: float, reasoning: str, ctx: Ag
         "status": "ok",
         "bet_placed": f"{direction} ${amount:.2f} on [{slug}]",
         "entry_price": round(bet.entry_price, 4),
+        "model_prob": round(model_prob, 4),
+        "market_prob": round(market_prob, 4),
+        "edge": round(edge, 4),
+        "available_cash": round(ctx.available_cash, 2),
+        "total_equity": round(ctx.total_equity, 2),
         "note": "下注已记录，结果将在月末结算后揭晓。",
-        "remaining_capital": round(ctx.capital, 2),
         "reasoning_recorded": reasoning,
     }, ensure_ascii=False)
 
@@ -274,14 +303,16 @@ def _get_portfolio(ctx: AgentContext) -> str:
             "slug": b.market_id[:20],
             "direction": b.direction,
             "amount": b.amount,
+            "model_prob": b.model_prob,
             "pnl": b.pnl,
             "resolution": b.resolution,
         })
 
     return json.dumps({
-        "starting_capital": ctx.starting_capital,
-        "current_capital": round(ctx.capital, 2),
-        "total_pnl": round(ctx.capital - ctx.starting_capital, 2),
+        "starting_capital": round(ctx.starting_capital, 2),
+        "available_cash": round(ctx.available_cash, 2),
+        "total_equity": round(ctx.total_equity, 2),
+        "realized_pnl": round(ctx.total_equity - ctx.starting_capital, 2),
         "open_bets": len([b for b in ctx.bets if b.pnl is None]),
         "settled_bets": len([b for b in ctx.bets if b.pnl is not None]),
         "bets": bets_info,
@@ -290,11 +321,14 @@ def _get_portfolio(ctx: AgentContext) -> str:
 
 def _finish_trading(summary: str, decisions: str, ctx: AgentContext) -> str:
     ctx.trade_log.append({"action": "finish", "summary": summary, "decisions": decisions})
+    equity = ctx.total_equity
     return json.dumps({
         "status": "done",
         "month": ctx.month_key,
-        "final_capital": round(ctx.capital, 2),
-        "total_return": f"{(ctx.capital - ctx.starting_capital) / ctx.starting_capital * 100:.1f}%",
+        "starting_capital": round(ctx.starting_capital, 2),
+        "available_cash": round(ctx.available_cash, 2),
+        "total_equity_pre_settle": round(equity, 2),
+        "total_return_pre_settle": f"{(equity - ctx.starting_capital) / ctx.starting_capital * 100:.1f}%",
         "total_bets": len(ctx.bets),
         "summary": summary,
     }, ensure_ascii=False)

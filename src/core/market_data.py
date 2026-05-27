@@ -31,6 +31,48 @@ def _parse_iso_utc(raw: str) -> Optional[datetime]:
         return None
 
 
+def _extract_resolution(raw: dict, prices: list) -> Optional[str]:
+    """Best-effort resolution extraction for a closed Gamma market.
+
+    Sources tried, in order:
+      1. umaResolutionStatuses — Polymarket's authoritative oracle status
+      2. resolvedBy / resolution fields on the raw payload
+      3. Final outcomePrices — only as a fallback, with a relaxed threshold
+    """
+    # 1. UMA resolution status (list of dicts, one per outcome)
+    uma = raw.get("umaResolutionStatuses")
+    if isinstance(uma, str):
+        try:
+            uma = json.loads(uma)
+        except Exception:
+            uma = None
+    if isinstance(uma, list):
+        for entry in uma:
+            if isinstance(entry, dict) and entry.get("status") == "resolved":
+                outcome = entry.get("outcome") or entry.get("payout")
+                if outcome and str(outcome).upper() in ("YES", "NO"):
+                    return str(outcome).upper()
+
+    # 2. Direct resolution field if Gamma sets one
+    direct = raw.get("resolution") or raw.get("resolvedOutcome")
+    if isinstance(direct, str) and direct.upper() in ("YES", "NO"):
+        return direct.upper()
+
+    # 3. Fall back to terminal prices, but allow 0.95 instead of 0.999.
+    #    Closed markets occasionally settle slightly off the rail in the snapshot.
+    if prices and len(prices) == 2:
+        try:
+            p0, p1 = float(prices[0]), float(prices[1])
+        except (TypeError, ValueError):
+            return None
+        if p0 >= 0.95 and p1 <= 0.05:
+            return "YES"
+        if p1 >= 0.95 and p0 <= 0.05:
+            return "NO"
+
+    return None
+
+
 def fetch_markets(
     year: int,
     month: int,
@@ -148,12 +190,7 @@ def _parse_market(raw: dict) -> Optional[Market]:
         if isinstance(token_ids, str):
             token_ids = json.loads(token_ids)
 
-        resolution = None
-        if prices and len(prices) == 2:
-            if float(prices[0]) >= 0.999:
-                resolution = "YES"
-            elif float(prices[1]) >= 0.999:
-                resolution = "NO"
+        resolution = _extract_resolution(raw, prices)
 
         return Market(
             id=raw.get("id", ""),

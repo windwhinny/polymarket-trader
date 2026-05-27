@@ -35,7 +35,7 @@ NO 价格: {no_price}
 在做任何判断之前，你必须至少调用一次 search_news 搜索相关背景信息。
 不了解事件来龙去脉就下注是盲目的。
 如果搜索无结果，选择 SKIP 并给出理由（信息不足无法判断）。
-必须在 3 轮内完成：第 1 轮搜索新闻，第 2 轮分析，第 3 轮调用 place_prediction。不要反复搜索。
+必须在 8 轮内完成：先搜 1-2 次新闻，再分析，最后调用 place_prediction。不要反复搜索同一关键词。
 
 【下注原则】
 - 只选近期结算（3 个月内）的市场，远期事件不确定性太大
@@ -49,8 +49,7 @@ NO 价格: {no_price}
 - reasoning: 1-2 句话说明理由
 - edge_direction: 市场是"高估了 YES" 还是 "低估了 YES" 还是 "定价合理"
 
-如果市场定价合理（无 edge），选 SKIP。
-请在 5 轮内完成分析。"""
+如果市场定价合理（无 edge），选 SKIP。"""
 
 
 def _screen_markets(markets: list[dict], config: dict, llm_cfg: LLMConfig, capital: float) -> list[str]:
@@ -244,7 +243,10 @@ def _analyze_market(market: dict, config: dict, llm_cfg: LLMConfig, capital: flo
         "reasoning": "",
         "edge_direction": "",
         "search_queries": [],
+        "trace": [],  # full conversation trace
     }
+
+    result["trace"].append({"role": "system", "content": system_msg})
 
     for turn in range(1, 6):  # max 5 turns
         try:
@@ -255,6 +257,10 @@ def _analyze_market(market: dict, config: dict, llm_cfg: LLMConfig, capital: flo
             break
 
         if tool_calls:
+            # Record model response with tool calls
+            trace_entry = {"role": "assistant", "content": content or None, "tool_calls": []}
+            result["trace"].append(trace_entry)
+
             for tc in tool_calls:
                 func_name = tc["name"]
                 func_args = tc.get("parsed_args", {})
@@ -263,6 +269,8 @@ def _analyze_market(market: dict, config: dict, llm_cfg: LLMConfig, capital: flo
                         func_args = json.loads(tc.get("arguments", "{}"))
                     except json.JSONDecodeError:
                         func_args = {}
+
+                trace_entry["tool_calls"].append({"name": func_name, "arguments": func_args})
 
                 if func_name == "search_news":
                     query = func_args.get("query", "")
@@ -294,6 +302,9 @@ def _analyze_market(market: dict, config: dict, llm_cfg: LLMConfig, capital: flo
                 else:
                     tool_result = json.dumps({"error": f"Unknown tool: {func_name}"})
 
+                # Record tool result in trace
+                result["trace"].append({"role": "tool", "name": func_name, "result": tool_result})
+
                 assistant_msg = {
                     "role": "assistant", "content": None,
                     "tool_calls": [{
@@ -309,6 +320,12 @@ def _analyze_market(market: dict, config: dict, llm_cfg: LLMConfig, capital: flo
                 })
 
                 if func_name == "place_prediction":
+                    # Record trace before returning
+                    result["trace"].append({
+                        "role": "assistant", "content": None,
+                        "tool_calls": [{"name": func_name, "arguments": func_args}]
+                    })
+                    result["trace"].append({"role": "tool", "name": func_name, "result": tool_result})
                     log.info("[%s] %s $%.0f (%.0f%% conf=%s) | %s",
                              market["slug"][:30], result["direction"],
                              result["amount"],
@@ -373,8 +390,17 @@ def run_predict(config: dict, llm_cfg: LLMConfig, output_dir: str,
 
 
 def _save_report(results: list, capital: float, out_dir: Path, llm_cfg: LLMConfig):
-    """Generate markdown report."""
+    """Generate markdown report and save traces."""
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    # Save per-market traces
+    traces_dir = out_dir / "traces"
+    traces_dir.mkdir(exist_ok=True)
+    for r in results:
+        slug = r["slug"].replace("/", "-")[:80]
+        with open(traces_dir / f"{slug}.json", "w") as f:
+            json.dump(r.get("trace", []), f, ensure_ascii=False, indent=2)
+
     bets = [r for r in results if r["direction"] != "SKIP"]
     skips = [r for r in results if r["direction"] == "SKIP"]
     total_bet = sum(r["amount"] for r in bets)
