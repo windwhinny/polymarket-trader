@@ -3,25 +3,36 @@
 import json
 import logging
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 log = logging.getLogger("pm-backtest.agent")
 
 
 class AgentContext:
-    """Mutable state for the agent during a month's trading session.
+    """Mutable state for the agent during a single decision session.
+
+    A "decision session" used to be a calendar month, but is now any point in
+    time at which the agent surveys the live market list and places bets. The
+    cutoff is `decision_dt` itself: searches and prices are pinned to that
+    moment, and bets carry placed_at = decision_dt for later event-driven
+    settlement.
 
     Cash accounting:
-      starting_capital — month-open equity (fixed; basis for risk limits)
+      starting_capital — equity at session open (basis for risk limits)
       available_cash   — unallocated cash; decreases as bets are placed
-      total_equity     — available_cash + sum(open bet stakes) + settled P&L;
-                         this is what an external observer would call "capital"
+      total_equity     — available_cash + sum(open bet stakes) + settled P&L
     """
 
-    def __init__(self, year: int, month: int, capital: float, markets: list, config: dict):
-        self.year = year
-        self.month = month
-        self.month_key = f"{year}-{month:02d}"
+    def __init__(self, decision_dt: datetime, capital: float, markets: list, config: dict,
+                 *, session_label: Optional[str] = None):
+        if decision_dt.tzinfo is None:
+            decision_dt = decision_dt.replace(tzinfo=timezone.utc)
+        self.decision_dt = decision_dt
+        self.year = decision_dt.year
+        self.month = decision_dt.month
+        # session_label is what shows up in Bet.month and report month columns.
+        # Default to YYYY-MM for back-compat with monthly aggregates.
+        self.month_key = session_label or decision_dt.strftime("%Y-%m")
         self.starting_capital = capital
         self.available_cash = capital
         self.markets = {m.slug: m for m in markets}
@@ -29,13 +40,18 @@ class AgentContext:
         self.trade_log = []
         self.config = config
 
-        # Date boundary
-        from datetime import timedelta, timezone
+        # Cutoff is the decision moment itself.
+        self.cutoff = decision_dt
+        self.cutoff_date = decision_dt.strftime("%Y-%m-%d")
+
+    @classmethod
+    def for_month(cls, year: int, month: int, capital: float, markets: list, config: dict):
+        """Back-compat constructor: cutoff = end of the named month."""
         if month == 12:
-            self.cutoff = datetime(year + 1, 1, 1, tzinfo=timezone.utc) - timedelta(seconds=1)
+            cutoff = datetime(year + 1, 1, 1, tzinfo=timezone.utc) - timedelta(seconds=1)
         else:
-            self.cutoff = datetime(year, month + 1, 1, tzinfo=timezone.utc) - timedelta(seconds=1)
-        self.cutoff_date = self.cutoff.strftime("%Y-%m-%d")
+            cutoff = datetime(year, month + 1, 1, tzinfo=timezone.utc) - timedelta(seconds=1)
+        return cls(cutoff, capital, markets, config, session_label=f"{year}-{month:02d}")
 
     @property
     def total_equity(self) -> float:
@@ -55,10 +71,21 @@ class AgentContext:
 
     def market_summary(self):
         lines = []
+        decision_naive = self.decision_dt.replace(tzinfo=None)
         for slug, m in self.markets.items():
             yes_price = m.outcome_prices[0] if m.outcome_prices else "?"
-            end = (m.end_date or "")[:10]
-            lines.append(f"  [{slug}] {m.question} | YES={yes_price} | vol=${m.volume:,.0f} | end={end}")
+            end_str = (m.end_date or "")[:10]
+            days_to_end = ""
+            if end_str:
+                try:
+                    end_dt = datetime.strptime(end_str, "%Y-%m-%d")
+                    delta_days = (end_dt - decision_naive).days
+                    days_to_end = f" | T-{delta_days}d"
+                except Exception:
+                    pass
+            lines.append(
+                f"  [{slug}] {m.question} | YES={yes_price} | vol=${m.volume:,.0f} | end={end_str}{days_to_end}"
+            )
         return "\n".join(lines)
 
 
@@ -96,20 +123,32 @@ def build_tools() -> list[dict]:
             "type": "function",
             "function": {
                 "name": "place_bet",
-                "description": "在预测市场上下注。每次只下一个注。amount 不能超过 starting_capital 的 15%。",
+                "description": (
+                    "在预测市场上下注。每次只下一个注。你只需要给出 model_prob (你估计的 YES 真实概率) "
+                    "和 confidence (你的把握程度)，方向和金额由系统按 Kelly 公式自动决定。"
+                    "如果你认为定价合理，使用 confidence='skip' 或者跳过这个市场。"
+                ),
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "slug": {"type": "string", "description": "市场 slug"},
-                        "direction": {"type": "string", "enum": ["YES", "NO"]},
-                        "amount": {"type": "number", "description": "下注金额（美元），不超过起始资金 15%"},
                         "model_prob": {
                             "type": "number",
-                            "description": "你估计的 YES 真实概率（0-1）。和市场 YES 价格的差就是你认为的 edge。"
+                            "description": "你估计的 YES 真实概率（0-1）。"
+                        },
+                        "confidence": {
+                            "type": "string",
+                            "enum": ["high", "medium", "low"],
+                            "description": (
+                                "high = 你非常确信（用全 Kelly 仓位），"
+                                "medium = 中等（半 Kelly），"
+                                "low = 略有把握（1/4 Kelly）。"
+                                "宁可低估，不要虚报。"
+                            )
                         },
                         "reasoning": {"type": "string", "description": "下注理由（1-2句话）"}
                     },
-                    "required": ["slug", "direction", "amount", "model_prob", "reasoning"]
+                    "required": ["slug", "model_prob", "confidence", "reasoning"]
                 }
             }
         },
@@ -151,9 +190,11 @@ def execute_tool(name: str, args: dict, ctx: AgentContext) -> str:
 
     elif name == "place_bet":
         return _place_bet(
-            args["slug"], args["direction"], args["amount"],
+            args["slug"],
             args.get("model_prob"),
-            args.get("reasoning", ""), ctx,
+            args.get("confidence", "low"),
+            args.get("reasoning", ""),
+            ctx,
         )
 
     elif name == "get_portfolio":
@@ -221,47 +262,85 @@ def _get_market_detail(slug: str, ctx: AgentContext) -> str:
     }, ensure_ascii=False)
 
 
-def _place_bet(slug: str, direction: str, amount: float,
-               model_prob: Optional[float], reasoning: str, ctx: AgentContext) -> str:
+CONFIDENCE_KELLY_FRACTION = {
+    "high": 1.0,
+    "medium": 0.5,
+    "low": 0.25,
+}
+MIN_EDGE_TO_BET = 0.03           # below 3pp edge → SKIP
+MAX_BET_PCT_OF_EQUITY = 0.15     # hard cap, matches the per-bet risk limit
+
+
+def _place_bet(slug: str, model_prob, confidence: str, reasoning: str,
+               ctx: AgentContext) -> str:
+    """Place a bet sized by Kelly given the agent's model_prob + confidence.
+
+    The agent supplies only its belief (model_prob) and how strongly it holds
+    that belief (confidence). Direction and amount fall out of Kelly math, so
+    the agent can't separately game stake size — virtually pumping confidence
+    just runs into the per-bet cap.
+    """
     market = ctx.markets.get(slug)
     if not market:
         return json.dumps({"error": f"未找到市场: {slug}"}, ensure_ascii=False)
 
-    if amount <= 0:
-        return json.dumps({"error": "下注金额必须大于 0"}, ensure_ascii=False)
+    market_prob = market.outcome_prices[0] if market.outcome_prices else 0.5
 
-    # Risk limit is anchored to month-open equity, not the dwindling cash balance,
-    # so the agent can place its planned 5-laid spread without the cap shrinking each turn.
-    max_per_bet = ctx.starting_capital * 0.15
-    if amount > max_per_bet:
+    if model_prob is None or not (0.0 < float(model_prob) < 1.0):
         return json.dumps({
-            "error": f"单笔下注不能超过起始资金的 15% (${max_per_bet:.0f})。请降低金额，分散到更多市场。",
-            "starting_capital": ctx.starting_capital,
-            "available_cash": round(ctx.available_cash, 2),
+            "error": "model_prob 必须是 0-1 之间的数字。",
+        }, ensure_ascii=False)
+    model_prob = max(0.01, min(0.99, float(model_prob)))
+
+    conf_key = (confidence or "low").lower()
+    conf_mult = CONFIDENCE_KELLY_FRACTION.get(conf_key)
+    if conf_mult is None:
+        return json.dumps({
+            "error": f"confidence 必须是 high/medium/low，收到 {confidence!r}",
+        }, ensure_ascii=False)
+
+    edge = model_prob - market_prob  # signed
+    abs_edge = abs(edge)
+    if abs_edge < MIN_EDGE_TO_BET:
+        return json.dumps({
+            "status": "skipped",
+            "reason": f"edge={abs_edge:.3f} 小于阈值 {MIN_EDGE_TO_BET}，定价合理，建议跳过。",
+            "model_prob": round(model_prob, 4),
+            "market_prob": round(market_prob, 4),
+        }, ensure_ascii=False)
+
+    if edge > 0:
+        # YES is undervalued
+        direction = "YES"
+        kelly_raw = edge / (1 - market_prob) if market_prob < 1 else 0
+    else:
+        direction = "NO"
+        kelly_raw = (-edge) / market_prob if market_prob > 0 else 0
+
+    kelly_fraction = max(0.0, kelly_raw) * conf_mult
+    # Cap at MAX_BET_PCT_OF_EQUITY of starting equity for risk control.
+    kelly_fraction = min(kelly_fraction, MAX_BET_PCT_OF_EQUITY)
+
+    amount = round(ctx.starting_capital * kelly_fraction, 2)
+    if amount < 1.0:
+        return json.dumps({
+            "status": "skipped",
+            "reason": f"按 Kelly 计算仓位仅 ${amount:.2f}，金额过小，建议跳过。",
+            "model_prob": round(model_prob, 4),
+            "market_prob": round(market_prob, 4),
+            "kelly_fraction": round(kelly_fraction, 4),
         }, ensure_ascii=False)
 
     if amount > ctx.available_cash:
-        return json.dumps({
-            "error": f"现金不足！可用现金 ${ctx.available_cash:.2f}，但想下注 ${amount:.2f}",
-            "available_cash": round(ctx.available_cash, 2),
-            "starting_capital": ctx.starting_capital,
-        }, ensure_ascii=False)
+        # Scale down to whatever cash remains.
+        amount = round(ctx.available_cash, 2)
+        if amount < 1.0:
+            return json.dumps({
+                "error": "现金不足以下注。",
+                "available_cash": round(ctx.available_cash, 2),
+            }, ensure_ascii=False)
 
     from .simulator import simulate_bet
-
-    market_prob = market.outcome_prices[0] if market.outcome_prices else 0.5
-
-    # model_prob is now supplied by the agent (probability of YES). Fall back to
-    # the market price (zero edge) if missing or out of range.
-    if model_prob is None or not (0.0 < model_prob < 1.0):
-        model_prob = market_prob
-    model_prob = max(0.01, min(0.99, float(model_prob)))
-
-    # Edge in the direction of the bet: positive when the agent thinks the bet is +EV.
-    if direction == "YES":
-        edge = model_prob - market_prob
-    else:
-        edge = (1 - model_prob) - (1 - market_prob)  # = market_prob - model_prob
 
     bet = simulate_bet(
         market=market, month=ctx.month_key, direction=direction,
@@ -271,6 +350,9 @@ def _place_bet(slug: str, direction: str, amount: float,
         capital=ctx.starting_capital,
     )
 
+    bet.placed_at = ctx.decision_dt.isoformat()
+    bet.settle_due_at = market.end_date or None
+
     ctx.available_cash -= amount
     bet.resolution = None
     bet.pnl = None
@@ -278,20 +360,23 @@ def _place_bet(slug: str, direction: str, amount: float,
 
     ctx.trade_log.append({
         "slug": slug, "direction": direction, "amount": amount,
-        "model_prob": model_prob, "edge": edge,
+        "model_prob": model_prob, "edge": edge, "confidence": conf_key,
         "reasoning": reasoning, "entry_price": bet.entry_price,
     })
 
     return json.dumps({
         "status": "ok",
-        "bet_placed": f"{direction} ${amount:.2f} on [{slug}]",
+        "bet_placed": f"{direction} ${amount:.2f} on [{slug}] (conf={conf_key})",
+        "direction_chosen_by_system": direction,
+        "amount_chosen_by_system": amount,
+        "kelly_fraction": round(kelly_fraction, 4),
         "entry_price": round(bet.entry_price, 4),
         "model_prob": round(model_prob, 4),
         "market_prob": round(market_prob, 4),
         "edge": round(edge, 4),
         "available_cash": round(ctx.available_cash, 2),
         "total_equity": round(ctx.total_equity, 2),
-        "note": "下注已记录，结果将在月末结算后揭晓。",
+        "note": "下注已记录。结果将在市场到期后揭晓。",
         "reasoning_recorded": reasoning,
     }, ensure_ascii=False)
 

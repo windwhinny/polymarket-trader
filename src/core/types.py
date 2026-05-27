@@ -52,7 +52,7 @@ class ModelPrediction:
 class Bet:
     """A simulated bet."""
     market_id: str
-    month: str  # "2025-01"
+    month: str  # decision-month tag, kept for reporting
     direction: str  # "YES" or "NO"
     model_prob: float
     market_prob: float
@@ -60,6 +60,9 @@ class Bet:
     kelly_fraction: float
     amount: float
     entry_price: float
+    placed_at: Optional[str] = None      # ISO datetime: when the agent decided
+    settle_due_at: Optional[str] = None  # ISO datetime: market end_date
+    settled_at: Optional[str] = None     # ISO datetime: actual settlement time
     resolution: Optional[str] = None  # filled after resolution check
     pnl: Optional[float] = None  # filled after resolution check
 

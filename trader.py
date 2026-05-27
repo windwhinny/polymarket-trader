@@ -73,10 +73,15 @@ def cmd_backtest(args):
     llm_cfg = _resolve_llm(args, config)
 
     from src.core.tracer import create_run_id
-    run_dir = args.output or f"runs/{create_run_id(args.run_id or llm_cfg.model.replace('/', '-'))}"
+    model_slug = llm_cfg.model.replace('/', '-')
+    prefix = args.run_id or f"backtest-{model_slug}"
+    run_dir = args.output or f"runs/{create_run_id(prefix)}"
     log.info("Run dir: %s", run_dir)
 
-    result = run_backtest(config, llm_cfg, run_dir, parallel=args.parallel)
+    result = run_backtest(config, llm_cfg, run_dir, parallel=args.parallel,
+                          cadence=args.cadence,
+                          enable_journal=not args.no_journal,
+                          baseline=args.baseline)
     save_report(result, run_dir)
 
 
@@ -119,6 +124,15 @@ def main():
     bt.add_argument("--capital", type=float, default=0)
     bt.add_argument("--min-volume", type=float, default=0)
     bt.add_argument("--parallel", type=int, default=4)
+    bt.add_argument("--cadence", default="weekly", choices=["weekly", "biweekly", "monthly"],
+                    help="How often the agent makes decisions inside the time window.")
+    bt.add_argument("--no-journal", action="store_true",
+                    help="Disable the cross-decision-day trading journal "
+                         "(per-decision cleanroom mode for independence experiments).")
+    bt.add_argument("--baseline", default="none",
+                    choices=["none", "all", "always-skip", "market-prob",
+                             "anti-favorite", "random"],
+                    help="Run a baseline strategy alongside (or instead of) the LLM agent.")
     bt.add_argument("--run-id", default="")
     bt.add_argument("--output", default="")
 

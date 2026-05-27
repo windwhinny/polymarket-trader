@@ -5,7 +5,7 @@ api_keys:
   deepseek:
     key: "${DEEPSEEK_API_KEY}"
     base_url: "${DEEPSEEK_BASE_URL:-https://api.deepseek.com}"
-    model: "deepseek-v4-pro"
+    model: "deepseek-v4-flash"
   kimi:
     key: "${KIMI_API_KEY}"
     base_url: "${KIMI_BASE_URL:-https://api.moonshot.cn/v1}"
@@ -32,6 +32,14 @@ backtest:
   end_month: "2026-04"
   initial_capital: 1000  # USD
   min_monthly_volume: 10000  # USD
+  # Only consider markets that resolve within this many days of the decision
+  # date. Aligns with the agent prompt's "T-30d preference". Bump to 60/90
+  # for a wider exploration window.
+  horizon_days: 30
+  # Take-profit threshold: if a pending bet's position price reaches this
+  # level on a later decision day, close it for the current price.
+  early_exit_threshold: 0.85
+  enable_early_exit: true
 
 kelly:
   fraction: 0.5

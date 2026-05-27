@@ -21,8 +21,8 @@ def setup_logger(name: str = "pm-backtest", level: int = logging.DEBUG) -> loggi
     ch.setFormatter(fmt)
     logger.addHandler(ch)
 
-    # File
-    log_dir = Path(__file__).parent.parent / "data"
+    # File — anchored at the project root's data/, not src/data/
+    log_dir = Path(__file__).parent.parent.parent / "data"
     log_dir.mkdir(parents=True, exist_ok=True)
     fh = logging.FileHandler(log_dir / "backtest.log", mode="a")
     fh.setLevel(logging.DEBUG)

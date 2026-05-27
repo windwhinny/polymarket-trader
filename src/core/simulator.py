@@ -98,3 +98,40 @@ def settle_bet(bet: Bet, market: Market) -> Bet:
         log.info("SETTLE | LOST | dir=%s pnl=%.4f", bet.direction, bet.pnl)
 
     return bet
+
+
+def early_close_bet(bet: Bet, current_yes_price: float, exit_at: str) -> Bet:
+    """Close a bet at the current market price (early exit, before resolution).
+
+    Unlike settle_bet, this is a real second leg: pay another taker fee + half-
+    spread to cross the book back out. The proceeds are
+        shares × current_position_price × (1 - spread)
+    where current_position_price is the YES price for a YES bet, (1-YES) for NO.
+    """
+    if bet.entry_price <= 0:
+        bet.resolution = "EARLY_CLOSE"
+        bet.pnl = 0.0
+        return bet
+
+    if bet.direction == "YES":
+        position_price = float(current_yes_price)
+    else:
+        position_price = 1 - float(current_yes_price)
+    position_price = max(0.01, min(0.99, position_price))
+
+    shares = bet.amount / bet.entry_price
+    spread = effective_spread(position_price)
+    sale_price = position_price * (1 - spread)
+    sale_price = max(0.0, min(1.0, sale_price))
+
+    gross = shares * sale_price
+    taker_fee = bet.amount * TAKER_FEE_RATE  # entry fee already baked into amount cost
+    exit_fee = gross * TAKER_FEE_RATE
+    bet.pnl = gross - bet.amount - taker_fee - exit_fee - GAS_COST
+    bet.resolution = "EARLY_CLOSE"
+    bet.settled_at = exit_at
+    log.info("EARLY CLOSE | %s | dir=%s entry=%.3f current=%.3f sale=%.3f "
+             "shares=%.2f gross=%.2f pnl=%.2f",
+             bet.market_id[:12], bet.direction, bet.entry_price, position_price,
+             sale_price, shares, gross, bet.pnl)
+    return bet

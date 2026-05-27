@@ -78,6 +78,29 @@ def fetch_price_at_time(
     return price
 
 
+def fetch_prices_at(
+    token_ids: list[str],
+    decision_dt,
+    cache: Optional[Cache] = None,
+    request_delay: float = 0.3,
+) -> dict[str, Optional[float]]:
+    """Fetch each token's price closest to `decision_dt` (any datetime, not just month-end)."""
+    target_ts = int(decision_dt.timestamp())
+    log.info("FETCHING prices for %d tokens at %s", len(token_ids), decision_dt.isoformat())
+    results = {}
+    import time
+    for i, tid in enumerate(token_ids):
+        if not tid:
+            results[tid] = None
+            continue
+        if i > 0:
+            time.sleep(request_delay)
+        results[tid] = fetch_price_at_time(tid, target_ts, cache)
+    valid = sum(1 for v in results.values() if v is not None)
+    log.info("RESULT | %d/%d prices fetched", valid, len(token_ids))
+    return results
+
+
 def fetch_prices_at_month_end(
     token_ids: list[str],
     year: int,
