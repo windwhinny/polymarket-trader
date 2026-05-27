@@ -98,16 +98,20 @@ class LLMClient:
             anthropic_tools = []
             for t in tools:
                 func = t["function"]
+                params = func.get("parameters", {}) or {}
+                props_in = params.get("properties", {}) or {}
+                props_out = {}
+                for k, v in props_in.items():
+                    spec = dict(v) if isinstance(v, dict) else {"type": "string"}
+                    spec.setdefault("type", "string")
+                    props_out[k] = spec
                 anthropic_tools.append({
                     "name": func["name"],
                     "description": func.get("description", ""),
                     "input_schema": {
                         "type": "object",
-                        "properties": {
-                            k: {"type": v.get("type", "string"), "description": v.get("description", "")}
-                            for k, v in func.get("parameters", {}).get("properties", {}).items()
-                        },
-                        "required": func.get("parameters", {}).get("required", []),
+                        "properties": props_out,
+                        "required": params.get("required", []),
                     }
                 })
         else:

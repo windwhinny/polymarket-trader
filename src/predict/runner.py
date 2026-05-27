@@ -141,19 +141,25 @@ def _fetch_active_markets(min_volume: float = 5000, limit: int = 20, cache: Cach
             if vol < min_volume:
                 continue
 
-            # Only include near-term markets (within 3 months)
+            # Only include near-term markets (within 3 months). Markets without
+            # a parseable endDate are excluded — silently letting them through
+            # contradicts the "近期结算" promise the prompt makes.
             end_date = raw.get("endDate", "")
-            if end_date:
-                try:
-                    end_dt = dateparser.parse(end_date)
-                    if end_dt is None:
-                        pass
-                    elif end_dt.tzinfo is not None:
-                        end_dt = end_dt.replace(tzinfo=None)
-                    if end_dt and end_dt > datetime.now() + timedelta(days=90):
-                        continue
-                except Exception:
-                    pass
+            if not end_date:
+                continue
+            try:
+                end_dt = dateparser.parse(end_date)
+            except Exception:
+                end_dt = None
+            if end_dt is None:
+                continue
+            if end_dt.tzinfo is not None:
+                end_dt = end_dt.replace(tzinfo=None)
+            if end_dt > datetime.now() + timedelta(days=90):
+                continue
+            if end_dt < datetime.now():
+                # Already past resolution but not yet flagged closed — skip.
+                continue
 
             all_markets.append({
                 "slug": raw.get("slug", ""),
@@ -248,7 +254,7 @@ def _analyze_market(market: dict, config: dict, llm_cfg: LLMConfig, capital: flo
 
     result["trace"].append({"role": "system", "content": system_msg})
 
-    for turn in range(1, 6):  # max 5 turns
+    for turn in range(1, 9):  # max 8 turns — accommodate thinking-mode models
         try:
             content, tool_calls, reasoning = client.chat(messages, tools)
         except Exception as e:
@@ -276,7 +282,6 @@ def _analyze_market(market: dict, config: dict, llm_cfg: LLMConfig, capital: flo
                     query = func_args.get("query", "")
                     result["search_queries"].append(query)
 
-                    # Use Tavily for real-time (SerpAPI rate limited)
                     try:
                         from tavily import TavilyClient
                         client_t = TavilyClient(api_key=config["api_keys"]["tavily"]["key"])
@@ -285,11 +290,30 @@ def _analyze_market(market: dict, config: dict, llm_cfg: LLMConfig, capital: flo
                     except Exception:
                         articles = []
 
+                    # Match the JSON shape used by backtest's _search_news so the
+                    # model sees a consistent search-result schema across modes.
                     if articles:
-                        parts = [f"## {a.get('title','')}\n{a.get('content','')}" for a in articles]
-                        tool_result = "\n\n".join(parts)
+                        payload = {
+                            "status": "ok",
+                            "query": query,
+                            "result_count": len(articles),
+                            "articles": [
+                                {
+                                    "title": a.get("title", ""),
+                                    "snippet": a.get("content", ""),
+                                    "date": a.get("published_date", ""),
+                                    "source": a.get("url", ""),
+                                }
+                                for a in articles
+                            ],
+                        }
                     else:
-                        tool_result = "(无搜索结果)"
+                        payload = {
+                            "status": "no_results",
+                            "query": query,
+                            "note": "搜索无结果。可换关键词或基于已知信息判断。",
+                        }
+                    tool_result = json.dumps(payload, ensure_ascii=False)
                     log.debug("[%s] search '%s': %d results", market["slug"][:20], query[:40], len(articles))
 
                 elif func_name == "place_prediction":
@@ -382,6 +406,22 @@ def run_predict(config: dict, llm_cfg: LLMConfig, output_dir: str,
 
     # Sort: bets first, then skips
     results.sort(key=lambda r: (r["direction"] == "SKIP", -r.get("amount", 0)))
+
+    # Cross-market portfolio cap: each market is sized independently, but the
+    # total recommended exposure shouldn't exceed PORTFOLIO_CAP_PCT of capital.
+    # If it does, scale down proportionally and annotate why.
+    PORTFOLIO_CAP_PCT = 0.50
+    cap_total = capital * PORTFOLIO_CAP_PCT
+    bet_results = [r for r in results if r["direction"] != "SKIP"]
+    total_requested = sum(r.get("amount", 0) for r in bet_results)
+    if total_requested > cap_total and total_requested > 0:
+        scale = cap_total / total_requested
+        for r in bet_results:
+            r["original_amount"] = r["amount"]
+            r["amount"] = round(r["amount"] * scale, 2)
+            r["scaled_down"] = True
+        log.info("Portfolio cap: %.0f%% requested, scaled by %.2f to %.0f%%",
+                 total_requested / capital * 100, scale, PORTFOLIO_CAP_PCT * 100)
 
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)

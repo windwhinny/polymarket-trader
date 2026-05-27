@@ -118,7 +118,10 @@ def search_context(
         search_queries.append(query[:80])
 
     for sq in search_queries:
-        cache_key = ("serpapi", sq[:100], start_date, end_date, str(max_results))
+        # cache key intentionally omits max_results: the SerpAPI response is the
+        # same regardless of slice size, and including it would miss-cache
+        # whenever the caller bumps max_results.
+        cache_key = ("serpapi", sq[:100], start_date, end_date)
 
         if cache:
             cached = cache.get(*cache_key)

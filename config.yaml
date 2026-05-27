@@ -6,6 +6,9 @@ api_keys:
     key: "${DEEPSEEK_API_KEY}"
     base_url: "${DEEPSEEK_BASE_URL:-https://api.deepseek.com}"
     model: "deepseek-v4-pro"
+  kimi:
+    key: "${KIMI_API_KEY}"
+    base_url: "${KIMI_BASE_URL:-https://api.moonshot.cn/v1}"
   tavily:
     key: "${TAVILY_API_KEY}"
   serpapi:
