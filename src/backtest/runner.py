@@ -67,7 +67,7 @@ def _run_agent_traced(ctx: AgentContext, llm_cfg: LLMConfig, tracer: Tracer) -> 
         tracer.model_call(len(messages), llm_cfg.provider, llm_cfg.model, 0.3)
 
         try:
-            content, tool_calls = client.chat(messages, tools, temperature=0.3, max_tokens=1000)
+            content, tool_calls, reasoning = client.chat(messages, tools, temperature=0.3, max_tokens=1000)
         except Exception as e:
             log.error("API ERROR turn %d: %s", turn, e)
             tracer.error(str(e))
@@ -99,13 +99,16 @@ def _run_agent_traced(ctx: AgentContext, llm_cfg: LLMConfig, tracer: Tracer) -> 
                             latest_bet.resolution or "?", func_args.get("reasoning", ""),
                         )
 
-                messages.append({
+                assistant_msg = {
                     "role": "assistant", "content": None,
                     "tool_calls": [{
                         "id": tc["id"], "type": "function",
                         "function": {"name": func_name, "arguments": tc.get("arguments", "{}")}
                     }]
-                })
+                }
+                if reasoning:
+                    assistant_msg["reasoning_content"] = reasoning
+                messages.append(assistant_msg)
                 messages.append({
                     "role": "tool", "tool_call_id": tc["id"], "content": result,
                 })
@@ -119,7 +122,10 @@ def _run_agent_traced(ctx: AgentContext, llm_cfg: LLMConfig, tracer: Tracer) -> 
                     return ctx
 
         elif content:
-            messages.append({"role": "assistant", "content": content})
+            assistant_msg = {"role": "assistant", "content": content}
+            if reasoning:
+                assistant_msg["reasoning_content"] = reasoning
+            messages.append(assistant_msg)
 
     log.warning("AGENT MAX TURNS | %s", ctx.month_key)
     return ctx

@@ -29,7 +29,7 @@ class LLMClient:
             self._client = OpenAI(api_key=cfg.api_key, base_url=url)
 
     def chat(self, messages: list, tools: list, temperature: float = 0.3, max_tokens: int = 1000):
-        """Send chat request and return (content, tool_calls_list)."""
+        """Send chat request and return (content, tool_calls_list, reasoning_content)."""
         if self.cfg.provider == "anthropic":
             return self._chat_anthropic(messages, tools, temperature, max_tokens)
         else:
@@ -46,6 +46,7 @@ class LLMClient:
         )
         msg = response.choices[0].message
         content = msg.content or ""
+        reasoning = getattr(msg, "reasoning_content", "") or ""
 
         tool_calls = []
         if msg.tool_calls:
@@ -61,7 +62,7 @@ class LLMClient:
                     "parsed_args": args,
                 })
 
-        return content, tool_calls
+        return content, tool_calls, reasoning
 
     def _chat_anthropic(self, messages, tools, temperature, max_tokens):
         system = ""
@@ -133,4 +134,4 @@ class LLMClient:
                     "parsed_args": block.input,
                 })
 
-        return content, tool_calls
+        return content, tool_calls, ""

@@ -84,7 +84,7 @@ def _screen_markets(markets: list[dict], config: dict, llm_cfg: LLMConfig, capit
 
     messages = [{"role": "user", "content": prompt}]
     try:
-        content, _ = client.chat(messages, [], temperature=0.2, max_tokens=500)
+        content, _, _ = client.chat(messages, [], temperature=0.2, max_tokens=500)
         result = json.loads(content) if isinstance(content, str) else content
         selected = result.get("selected", [])
         log.info("Screen: %d → %d selected | %s", len(markets), len(selected),
@@ -245,7 +245,7 @@ def _analyze_market(market: dict, config: dict, llm_cfg: LLMConfig, capital: flo
 
     for turn in range(1, 6):  # max 5 turns
         try:
-            content, tool_calls = client.chat(messages, tools, temperature=0.3, max_tokens=500)
+            content, tool_calls, reasoning = client.chat(messages, tools, temperature=0.3, max_tokens=500)
         except Exception as e:
             log.error("[%s] API error turn %d: %s", market["slug"][:30], turn, e)
             result["reasoning"] = f"API error: {e}"
@@ -291,13 +291,16 @@ def _analyze_market(market: dict, config: dict, llm_cfg: LLMConfig, capital: flo
                 else:
                     tool_result = json.dumps({"error": f"Unknown tool: {func_name}"})
 
-                messages.append({
+                assistant_msg = {
                     "role": "assistant", "content": None,
                     "tool_calls": [{
                         "id": tc["id"], "type": "function",
                         "function": {"name": func_name, "arguments": tc.get("arguments", "{}")}
                     }]
-                })
+                }
+                if reasoning:
+                    assistant_msg["reasoning_content"] = reasoning
+                messages.append(assistant_msg)
                 messages.append({
                     "role": "tool", "tool_call_id": tc["id"], "content": tool_result,
                 })
@@ -310,7 +313,10 @@ def _analyze_market(market: dict, config: dict, llm_cfg: LLMConfig, capital: flo
                              result["confidence"], result["reasoning"][:60])
                     return result
         elif content:
-            messages.append({"role": "assistant", "content": content})
+            assistant_msg = {"role": "assistant", "content": content}
+            if reasoning:
+                assistant_msg["reasoning_content"] = reasoning
+            messages.append(assistant_msg)
 
     return result
 
