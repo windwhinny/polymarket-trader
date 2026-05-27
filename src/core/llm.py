@@ -22,7 +22,10 @@ class LLMClient:
         self.cfg = cfg
         if cfg.provider == "anthropic":
             import anthropic
-            self._client = anthropic.Anthropic(api_key=cfg.api_key)
+            kwargs = {"api_key": cfg.api_key}
+            if cfg.base_url:
+                kwargs["base_url"] = cfg.base_url
+            self._client = anthropic.Anthropic(**kwargs)
         else:
             from openai import OpenAI
             url = cfg.base_url or "https://api.openai.com/v1"

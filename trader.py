@@ -18,11 +18,42 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 
+def _resolve_llm(args, config):
+    """Pick api_key / base_url / model based on --provider and --gateway.
+
+    Gateway choices (config.api_keys.<gateway>):
+      - deepseek  → OpenAI-compatible, model defaults to deepseek-v4-pro
+      - ofox      → multi-model gateway, exposes both Anthropic and OpenAI endpoints
+                    (Claude 4.7 via /anthropic, GPT 5.5 via /v1)
+    """
+    from src.core.llm import LLMConfig
+    api_keys = config.get("api_keys", {})
+
+    gateway = args.gateway or ("ofox" if args.provider == "anthropic" else "deepseek")
+    entry = api_keys.get(gateway, {}) or {}
+
+    if gateway == "ofox":
+        if args.provider == "anthropic":
+            base_url = args.base_url or entry.get("anthropic_base_url", "")
+            default_model = entry.get("anthropic_model", "")
+        else:
+            base_url = args.base_url or entry.get("openai_base_url", "")
+            default_model = entry.get("openai_model", "")
+        api_key = args.api_key or entry.get("key") or os.environ.get("ANTHROPIC_API_KEY", "")
+    else:
+        # deepseek (or any other OpenAI-compatible single-endpoint entry)
+        base_url = args.base_url or entry.get("base_url", "")
+        default_model = entry.get("model", "deepseek-v4-pro")
+        api_key = args.api_key or entry.get("key", "")
+
+    model = args.model or default_model
+    return LLMConfig(provider=args.provider, api_key=api_key, model=model, base_url=base_url)
+
+
 def cmd_backtest(args):
     """Run a backtest with the autonomous agent."""
     from src.core.logger import setup_logger
     from src.core.config import load_config
-    from src.core.llm import LLMConfig
     from src.backtest.runner import run_backtest
     from src.core.reporter import save_report
 
@@ -39,18 +70,7 @@ def cmd_backtest(args):
     if args.min_volume:
         config["backtest"]["min_monthly_volume"] = args.min_volume
 
-    # LLM config
-    api_keys = config.get("api_keys", {})
-    provider_keys = api_keys.get("deepseek", {})
-
-    if args.provider == "anthropic":
-        api_key = args.api_key or os.environ.get("ANTHROPIC_API_KEY", "")
-        base_url = ""
-    else:
-        api_key = args.api_key or provider_keys.get("key", "")
-        base_url = args.base_url or provider_keys.get("base_url", "")
-
-    llm_cfg = LLMConfig(provider=args.provider, api_key=api_key, model=args.model, base_url=base_url)
+    llm_cfg = _resolve_llm(args, config)
 
     from src.core.tracer import create_run_id
     run_dir = args.output or f"runs/{create_run_id(args.run_id or llm_cfg.model.replace('/', '-'))}"
@@ -64,25 +84,15 @@ def cmd_predict(args):
     """Run real-time market predictions."""
     from src.core.logger import setup_logger
     from src.core.config import load_config
-    from src.core.llm import LLMConfig
     from src.predict.runner import run_predict
     from src.core.tracer import create_run_id
 
     log = setup_logger("pm-trader")
     config = load_config()
 
-    api_keys = config.get("api_keys", {})
-    provider_keys = api_keys.get("deepseek", {})
-
-    if args.provider == "anthropic":
-        api_key = args.api_key or os.environ.get("ANTHROPIC_API_KEY", "")
-        base_url = ""
-    else:
-        api_key = args.api_key or provider_keys.get("key", "")
-        base_url = args.base_url or provider_keys.get("base_url", "")
-
-    llm_cfg = LLMConfig(provider=args.provider, api_key=api_key, model=args.model, base_url=base_url)
-    run_id = args.run_id or create_run_id("predict")
+    llm_cfg = _resolve_llm(args, config)
+    prefix = args.run_id or "predict"
+    run_id = create_run_id(prefix)
     output_dir = args.output or f"runs/{run_id}"
     log.info("Output: %s", output_dir)
 
@@ -98,7 +108,10 @@ def main():
     # backtest subcommand
     bt = sub.add_parser("backtest", help="Run historical backtest")
     bt.add_argument("--provider", default="openai", choices=["openai", "anthropic"])
-    bt.add_argument("--model", default="deepseek-v4-pro")
+    bt.add_argument("--gateway", default="", choices=["", "deepseek", "ofox"],
+                    help="Which gateway entry in config.api_keys to use. "
+                         "Default: ofox when --provider anthropic, else deepseek.")
+    bt.add_argument("--model", default="")  # provider/gateway-specific default applied in cmd_backtest
     bt.add_argument("--api-key", default="")
     bt.add_argument("--base-url", default="")
     bt.add_argument("--start", default="")
@@ -112,7 +125,10 @@ def main():
     # predict subcommand
     pr = sub.add_parser("predict", help="Real-time market predictions")
     pr.add_argument("--provider", default="openai", choices=["openai", "anthropic"])
-    pr.add_argument("--model", default="deepseek-v4-pro")
+    pr.add_argument("--gateway", default="", choices=["", "deepseek", "ofox"],
+                    help="Which gateway entry in config.api_keys to use. "
+                         "Default: ofox when --provider anthropic, else deepseek.")
+    pr.add_argument("--model", default="")  # provider/gateway-specific default applied in cmd_predict
     pr.add_argument("--api-key", default="")
     pr.add_argument("--base-url", default="")
     pr.add_argument("--capital", type=float, default=1000)

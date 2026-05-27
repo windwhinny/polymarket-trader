@@ -63,6 +63,12 @@ def load_config(path: str = "config.yaml") -> dict:
     # Direct env var overrides (highest priority)
     if os.environ.get("DEEPSEEK_API_KEY"):
         config.setdefault("api_keys", {}).setdefault("deepseek", {})["key"] = os.environ["DEEPSEEK_API_KEY"]
+    if os.environ.get("OFOX_API_KEY"):
+        config.setdefault("api_keys", {}).setdefault("ofox", {})["key"] = os.environ["OFOX_API_KEY"]
+    if os.environ.get("OFOX_ANTHROPIC_BASE_URL"):
+        config.setdefault("api_keys", {}).setdefault("ofox", {})["anthropic_base_url"] = os.environ["OFOX_ANTHROPIC_BASE_URL"]
+    if os.environ.get("OFOX_OPENAI_BASE_URL"):
+        config.setdefault("api_keys", {}).setdefault("ofox", {})["openai_base_url"] = os.environ["OFOX_OPENAI_BASE_URL"]
     if os.environ.get("SERPAPI_API_KEY"):
         config.setdefault("api_keys", {}).setdefault("serpapi", {})["key"] = os.environ["SERPAPI_API_KEY"]
     if os.environ.get("TAVILY_API_KEY"):
