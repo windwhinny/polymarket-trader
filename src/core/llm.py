@@ -96,6 +96,8 @@ class LLMClient:
                 if m["role"] == "assistant" and not content:
                     continue
                 anthropic_msgs.append({"role": m["role"], "content": content})
+        if not anthropic_msgs:
+            anthropic_msgs.append({"role": "user", "content": "Begin."})
 
         if tools:
             anthropic_tools = []
@@ -122,6 +124,7 @@ class LLMClient:
 
         response = self._client.messages.create(
             model=self.cfg.model,
+            max_tokens=4096,
             system=system,
             messages=anthropic_msgs,
             tools=anthropic_tools,

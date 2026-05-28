@@ -16,7 +16,7 @@ python trader.py predict --gateway deepseek --model deepseek-v4-pro \
 
 # 指定 Claude（通过 ofox 网关）
 python trader.py backtest --provider anthropic --start 2026-04 --end 2026-04
-# Provider=anthropic 默认走 ofox /anthropic endpoint，model=anthropic/claude-opus-4-7
+# Provider=anthropic 默认走 ofox /anthropic endpoint，model=anthropic/claude-opus-4.7
 
 # 指定 GPT 5.5（也通过 ofox）
 python trader.py backtest --provider openai --gateway ofox --start 2026-04 --end 2026-04
