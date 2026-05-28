@@ -24,13 +24,11 @@ import logging
 import random
 from datetime import datetime
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Optional
 
 from .types import Bet
-from .simulator import simulate_bet
-from .tools import (
-    CONFIDENCE_KELLY_FRACTION, MIN_EDGE_TO_BET, MAX_BET_PCT_OF_EQUITY,
-)
+from .kelly import params_from_config, size_bet
+from .simulator import max_affordable_amount, simulate_bet
 
 log = logging.getLogger("pm-trader.baseline")
 
@@ -62,7 +60,7 @@ def baseline_market_prob(market: dict) -> dict:
 def baseline_anti_favorite(market: dict) -> dict:
     """Bet NO on cheap longshots (YES ≤ 0.10), expecting longshot bias.
 
-    We set model_prob low enough to clear MIN_EDGE_TO_BET (0.03) — i.e. our
+    We set model_prob low enough to clear the configured min_edge — i.e. our
     "model" believes the longshot is at least 4pp less likely than market does.
     """
     yes = market["yes_price"]
@@ -83,14 +81,14 @@ def baseline_anti_favorite(market: dict) -> dict:
     }
 
 
-def baseline_random(market: dict, seed_for_market: int) -> dict:
+def baseline_random(market: dict, seed_for_market: int, min_edge: float = 0.03) -> dict:
     """Pick YES or NO 50/50; deviation 8pp from market in chosen direction."""
     rng = random.Random(seed_for_market)
     bullish = rng.random() < 0.5
     yes = market["yes_price"]
-    # Force a tradable edge (≥ MIN_EDGE_TO_BET) so the baseline actually bets;
+    # Force a tradable edge so the baseline actually bets;
     # it's noise, but it has to clear the same gate the LLM does.
-    delta = max(0.05, MIN_EDGE_TO_BET + 0.02)
+    delta = max(0.05, min_edge + 0.02)
     if bullish:
         mp = min(0.99, yes + delta)
     else:
@@ -120,6 +118,7 @@ def run_baseline_decision_day(
     starting_capital: float,
     obj_by_slug: dict,
     seed: int = 0,
+    config: Optional[dict] = None,
 ) -> tuple[list[Bet], list[dict]]:
     """Synchronous, deterministic baseline. No LLM, no SerpAPI, no traces.
 
@@ -129,29 +128,30 @@ def run_baseline_decision_day(
     fn = BASELINES.get(name)
     if fn is None:
         raise ValueError(f"unknown baseline: {name}")
+    kelly_params = params_from_config(config)
 
     # First pass: get verdicts and intended amounts (no portfolio cap yet)
     candidates = []  # (decision_entry, intended_amount, direction, edge, mp)
     decisions: list[dict] = []
     for i, m in enumerate(valid_markets):
-        verdict = fn(m, seed * 1000 + i)
+        if name == "random":
+            verdict = baseline_random(m, seed * 1000 + i, min_edge=kelly_params.min_edge)
+        else:
+            verdict = fn(m, seed * 1000 + i)
         mp = verdict["model_prob"]
         conf = verdict["confidence"]
         yes = m["yes_price"]
         edge = mp - yes if isinstance(mp, (int, float)) else None
-        direction = "SKIP"
-        intended_amount = 0.0
-        if isinstance(mp, (int, float)) and conf in CONFIDENCE_KELLY_FRACTION:
-            if abs(edge) >= MIN_EDGE_TO_BET:
-                if edge > 0:
-                    direction = "YES"
-                    kelly_raw = edge / (1 - yes) if yes < 1 else 0
-                else:
-                    direction = "NO"
-                    kelly_raw = (-edge) / yes if yes > 0 else 0
-                kelly = max(0.0, kelly_raw) * CONFIDENCE_KELLY_FRACTION[conf]
-                kelly = min(kelly, MAX_BET_PCT_OF_EQUITY)
-                intended_amount = round(starting_capital * kelly, 2)
+        sizing = size_bet(
+            model_prob=mp,
+            market_prob=yes,
+            confidence=conf,
+            capital=starting_capital,
+            config=config,
+        )
+        direction = sizing["direction"]
+        intended_amount = sizing["amount"]
+        edge = sizing["edge"]
 
         decision_entry = {
             "slug": m["slug"],
@@ -196,8 +196,9 @@ def run_baseline_decision_day(
             entry["direction"] = "SKIP"
             entry["amount"] = 0.0
             continue
-        if amount > cash_remaining:
-            amount = round(cash_remaining, 2)
+        max_stake = max_affordable_amount(cash_remaining)
+        if amount > max_stake:
+            amount = max_stake
             if amount < 1.0:
                 entry["direction"] = "SKIP"
                 entry["amount"] = 0.0
@@ -217,8 +218,10 @@ def run_baseline_decision_day(
         bet.settle_due_at = market_obj.end_date or None
         bet.resolution = None
         bet.pnl = None
+        entry["entry_cost"] = round(bet.entry_cost, 2)
+        entry["entry_fee"] = round(bet.entry_fee, 4)
         new_bets.append(bet)
-        cash_remaining -= amount
+        cash_remaining -= bet.entry_cost
 
     decisions.sort(key=lambda d: (d["direction"] == "SKIP", -d.get("amount", 0)))
     return new_bets, decisions

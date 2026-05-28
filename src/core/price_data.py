@@ -16,17 +16,18 @@ def fetch_price_at_time(
     token_id: str,
     target_ts: int,
     cache: Optional[Cache] = None,
+    max_age_seconds: Optional[int] = None,
 ) -> Optional[float]:
     """
-    Fetch the price of a token closest to a target timestamp.
+    Fetch the latest price at or before a target timestamp.
 
     Uses CLOB /prices-history with interval=max to get all available data,
-    then finds the data point closest to target_ts.
+    then finds the most recent data point that does not peek past target_ts.
     """
     if not token_id:
         return None
 
-    cache_key = ("price", token_id, str(target_ts))
+    cache_key = ("price", token_id, str(target_ts), str(max_age_seconds or ""))
 
     if cache:
         cached = cache.get(*cache_key)
@@ -57,20 +58,31 @@ def fetch_price_at_time(
 
     log.debug("GOT | %d data points for token %s", len(history), token_id[:16])
 
-    # Find closest data point to target_ts
+    # Find the last data point at or before target_ts. Using the closest point
+    # can select a future price and leak post-decision information.
     closest = None
     min_diff = float("inf")
     for point in history:
-        diff = abs(point["t"] - target_ts)
+        t = point.get("t")
+        if t is None or t > target_ts:
+            continue
+        diff = target_ts - t
         if diff < min_diff:
             min_diff = diff
             closest = point
 
     if closest is None:
+        log.warning("NO PAST PRICE | token %s before ts=%d", token_id[:16], target_ts)
+        return None
+
+    if max_age_seconds is not None and min_diff > max_age_seconds:
+        log.warning("STALE PRICE | token %s age=%ds > max=%ds",
+                    token_id[:16], int(min_diff), max_age_seconds)
         return None
 
     price = float(closest["p"])
-    log.debug("PRICE | token %s @ ts=%d → %.4f (diff=%ds)", token_id[:12], target_ts, price, int(min_diff))
+    log.debug("PRICE | token %s @ ts=%d → %.4f (age=%ds)",
+              token_id[:12], target_ts, price, int(min_diff))
 
     if cache:
         cache.set(price, *cache_key)
@@ -83,8 +95,9 @@ def fetch_prices_at(
     decision_dt,
     cache: Optional[Cache] = None,
     request_delay: float = 0.3,
+    max_age_seconds: Optional[int] = None,
 ) -> dict[str, Optional[float]]:
-    """Fetch each token's price closest to `decision_dt` (any datetime, not just month-end)."""
+    """Fetch each token's latest price at or before `decision_dt`."""
     target_ts = int(decision_dt.timestamp())
     log.info("FETCHING prices for %d tokens at %s", len(token_ids), decision_dt.isoformat())
     results = {}
@@ -95,7 +108,7 @@ def fetch_prices_at(
             continue
         if i > 0:
             time.sleep(request_delay)
-        results[tid] = fetch_price_at_time(tid, target_ts, cache)
+        results[tid] = fetch_price_at_time(tid, target_ts, cache, max_age_seconds)
     valid = sum(1 for v in results.values() if v is not None)
     log.info("RESULT | %d/%d prices fetched", valid, len(token_ids))
     return results

@@ -33,13 +33,17 @@ from ..core.market_analyzer import analyze_market
 from ..core.search_backend import make_serpapi_backend
 from ..core.screener import screen_markets
 from ..core.report_writer import write_decision_report
-from ..core.simulator import settle_bet, simulate_bet, early_close_bet
+from ..core.simulator import (
+    cash_outlay_for_bet,
+    early_close_bet,
+    max_affordable_amount,
+    settle_bet,
+    simulate_bet,
+)
 from ..core.baselines import (
     run_baseline_decision_day, BASELINE_NAMES,
 )
-from ..core.tools import (
-    CONFIDENCE_KELLY_FRACTION, MIN_EDGE_TO_BET, MAX_BET_PCT_OF_EQUITY,
-)
+from ..core.kelly import size_bet
 from ..core.reporter import generate_final_report
 
 log = logging.getLogger("pm-backtest.runner")
@@ -86,7 +90,8 @@ def _decision_data(decision_dt: datetime, config: dict, cache: Cache):
     for m in markets:
         all_tids.extend(m.token_ids)
     prices = fetch_prices_at(all_tids, decision_dt, cache=cache,
-                             request_delay=config["api"]["request_delay"])
+                             request_delay=config["api"]["request_delay"],
+                             max_age_seconds=config["api"].get("price_max_age_seconds"))
 
     valid_dicts = []
     for m in markets:
@@ -226,21 +231,16 @@ def _run_decision_day(
         conf = analysis.get("confidence", "skip")
         yes = m["yes_price"]
 
-        direction = "SKIP"
-        intended_amount = 0.0
-        edge = None
-        if isinstance(mp, (int, float)):
-            edge = mp - yes
-            if conf in CONFIDENCE_KELLY_FRACTION and abs(edge) >= MIN_EDGE_TO_BET:
-                if edge > 0:
-                    direction = "YES"
-                    kelly_raw = edge / (1 - yes) if yes < 1 else 0
-                else:
-                    direction = "NO"
-                    kelly_raw = (-edge) / yes if yes > 0 else 0
-                kelly = max(0.0, kelly_raw) * CONFIDENCE_KELLY_FRACTION[conf]
-                kelly = min(kelly, MAX_BET_PCT_OF_EQUITY)
-                intended_amount = round(starting_capital * kelly, 2)
+        sizing = size_bet(
+            model_prob=mp,
+            market_prob=yes,
+            confidence=conf,
+            capital=starting_capital,
+            config=config,
+        )
+        direction = sizing["direction"]
+        intended_amount = sizing["amount"]
+        edge = sizing["edge"]
 
         slug_safe = slug.replace("/", "-")[:80]
         decision_entry = {
@@ -262,7 +262,7 @@ def _run_decision_day(
             "trace_dir": f"traces/{slug_safe}",
             "research_summary": [
                 {"stance": r.get("stance"), "strength": r.get("strength"),
-                 "evidence_count": len(r.get("evidence", []))}
+                 "evidence_count": r.get("evidence_count", len(r.get("evidence_ids", [])))}
                 for r in analysis.get("research", [])
             ],
             "critic": (analysis.get("critic") or {}).get("suggested_action"),
@@ -294,8 +294,9 @@ def _run_decision_day(
             entry["direction"] = "SKIP"
             entry["amount"] = 0.0
             continue
-        if amount > cash_remaining:
-            amount = round(cash_remaining, 2)
+        max_stake = max_affordable_amount(cash_remaining)
+        if amount > max_stake:
+            amount = max_stake
             if amount < 1.0:
                 entry["direction"] = "SKIP"
                 entry["amount"] = 0.0
@@ -315,8 +316,10 @@ def _run_decision_day(
         bet.settle_due_at = market_obj.end_date or None
         bet.resolution = None
         bet.pnl = None
+        entry["entry_cost"] = round(bet.entry_cost, 2)
+        entry["entry_fee"] = round(bet.entry_fee, 4)
         new_bets.append(bet)
-        cash_remaining -= amount
+        cash_remaining -= bet.entry_cost
 
     # Sort decisions: bets first (by amount desc), then skips
     decisions.sort(key=lambda d: (d["direction"] == "SKIP", -d.get("amount", 0)))
@@ -377,11 +380,11 @@ def _replay_until(pending_bets: list, market_index: dict, cash: float,
         if market is None:
             bet.resolution = "UNRESOLVED"
             bet.pnl = 0.0
-            cash += bet.amount
+            cash += cash_outlay_for_bet(bet)
         else:
             settle_bet(bet, market)
             if bet.pnl is not None:
-                cash += bet.amount + bet.pnl
+                cash += cash_outlay_for_bet(bet) + bet.pnl
         bet.settled_at = due.isoformat()
         newly.append(bet)
         pending_bets.pop(i)
@@ -418,6 +421,7 @@ def _early_exit_check(
     prices = fetch_prices_at(
         token_ids, decision_dt, cache=cache,
         request_delay=config["api"].get("request_delay", 0.3),
+        max_age_seconds=config["api"].get("price_max_age_seconds"),
     )
 
     closed = []
@@ -436,7 +440,7 @@ def _early_exit_check(
         if position_price >= threshold:
             early_close_bet(bet, yes_now, exit_at=decision_dt.isoformat())
             if bet.pnl is not None:
-                cash += bet.amount + bet.pnl
+                cash += cash_outlay_for_bet(bet) + bet.pnl
             closed.append(bet)
             pending_bets.pop(i)
         else:
@@ -533,7 +537,7 @@ def run_backtest(config: dict, llm_cfg: LLMConfig, run_dir: str, parallel: int =
         all_decisions_by_day[dt.strftime("%Y-%m-%d")] = day_decisions
         for b in new_bets:
             pending_bets.append(b)
-            cash -= b.amount
+            cash -= cash_outlay_for_bet(b)
         log.info("  %s: placed %d bets, cash %.2f", dt.date(), len(new_bets), cash)
 
     # Final replay
@@ -659,11 +663,12 @@ def _run_baseline_track(
             starting_capital=starting_capital_session,
             obj_by_slug=obj_by_slug,
             seed=seed_idx,
+            config=config,
         )
         decisions_by_day[dt.strftime("%Y-%m-%d")] = day_decisions
         for b in new_bets:
             pending_bets.append(b)
-            cash -= b.amount
+            cash -= cash_outlay_for_bet(b)
 
     # Tail settle
     far_future = datetime(2099, 1, 1, tzinfo=timezone.utc)

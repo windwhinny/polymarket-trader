@@ -293,52 +293,39 @@ def _place_bet(slug: str, model_prob, confidence: str, reasoning: str,
     model_prob = max(0.01, min(0.99, float(model_prob)))
 
     conf_key = (confidence or "low").lower()
-    conf_mult = CONFIDENCE_KELLY_FRACTION.get(conf_key)
-    if conf_mult is None:
-        return json.dumps({
-            "error": f"confidence 必须是 high/medium/low，收到 {confidence!r}",
-        }, ensure_ascii=False)
-
-    edge = model_prob - market_prob  # signed
-    abs_edge = abs(edge)
-    if abs_edge < MIN_EDGE_TO_BET:
-        return json.dumps({
-            "status": "skipped",
-            "reason": f"edge={abs_edge:.3f} 小于阈值 {MIN_EDGE_TO_BET}，定价合理，建议跳过。",
-            "model_prob": round(model_prob, 4),
-            "market_prob": round(market_prob, 4),
-        }, ensure_ascii=False)
-
-    if edge > 0:
-        # YES is undervalued
-        direction = "YES"
-        kelly_raw = edge / (1 - market_prob) if market_prob < 1 else 0
-    else:
-        direction = "NO"
-        kelly_raw = (-edge) / market_prob if market_prob > 0 else 0
-
-    kelly_fraction = max(0.0, kelly_raw) * conf_mult
-    # Cap at MAX_BET_PCT_OF_EQUITY of starting equity for risk control.
-    kelly_fraction = min(kelly_fraction, MAX_BET_PCT_OF_EQUITY)
-
-    amount = round(ctx.starting_capital * kelly_fraction, 2)
-    if amount < 1.0:
+    from .kelly import size_bet
+    sizing = size_bet(
+        model_prob=model_prob,
+        market_prob=market_prob,
+        confidence=conf_key,
+        capital=ctx.starting_capital,
+        config=ctx.config,
+    )
+    edge = sizing["edge"]
+    if sizing["direction"] == "SKIP":
         return json.dumps({
             "status": "skipped",
-            "reason": f"按 Kelly 计算仓位仅 ${amount:.2f}，金额过小，建议跳过。",
+            "reason": sizing["reason"],
             "model_prob": round(model_prob, 4),
             "market_prob": round(market_prob, 4),
-            "kelly_fraction": round(kelly_fraction, 4),
+            "edge": round(edge, 4) if edge is not None else None,
         }, ensure_ascii=False)
 
-    if amount > ctx.available_cash:
+    direction = sizing["direction"]
+    kelly_fraction = sizing["kelly_fraction"]
+    amount = sizing["amount"]
+
+    from .simulator import max_affordable_amount
+    max_stake = max_affordable_amount(ctx.available_cash)
+    if amount > max_stake:
         # Scale down to whatever cash remains.
-        amount = round(ctx.available_cash, 2)
+        amount = max_stake
         if amount < 1.0:
             return json.dumps({
                 "error": "现金不足以下注。",
                 "available_cash": round(ctx.available_cash, 2),
             }, ensure_ascii=False)
+        kelly_fraction = amount / ctx.starting_capital
 
     from .simulator import simulate_bet
 
@@ -353,7 +340,7 @@ def _place_bet(slug: str, model_prob, confidence: str, reasoning: str,
     bet.placed_at = ctx.decision_dt.isoformat()
     bet.settle_due_at = market.end_date or None
 
-    ctx.available_cash -= amount
+    ctx.available_cash -= bet.entry_cost
     bet.resolution = None
     bet.pnl = None
     ctx.bets.append(bet)
@@ -362,6 +349,7 @@ def _place_bet(slug: str, model_prob, confidence: str, reasoning: str,
         "slug": slug, "direction": direction, "amount": amount,
         "model_prob": model_prob, "edge": edge, "confidence": conf_key,
         "reasoning": reasoning, "entry_price": bet.entry_price,
+        "entry_cost": bet.entry_cost,
     })
 
     return json.dumps({
@@ -371,6 +359,7 @@ def _place_bet(slug: str, model_prob, confidence: str, reasoning: str,
         "amount_chosen_by_system": amount,
         "kelly_fraction": round(kelly_fraction, 4),
         "entry_price": round(bet.entry_price, 4),
+        "entry_cost": round(bet.entry_cost, 4),
         "model_prob": round(model_prob, 4),
         "market_prob": round(market_prob, 4),
         "edge": round(edge, 4),

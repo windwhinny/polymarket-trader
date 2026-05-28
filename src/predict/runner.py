@@ -165,21 +165,20 @@ def run_predict(config: dict, llm_cfg: LLMConfig, output_dir: str,
                 log.error("[%s] analysis failed: %s", slug[:30], e)
                 analyses[slug] = None
 
-    decisions = _build_decisions(all_markets, verdicts, analyses, capital, out)
+    decisions = _build_decisions(all_markets, verdicts, analyses, capital, out, config)
     _save_summary(decisions, capital, out, llm_cfg, now_iso)
 
     return {"markets_analyzed": len(selected), "output_dir": str(out)}
 
 
-def _build_decisions(all_markets, verdicts, analyses, capital, out_dir: Path) -> list[dict]:
+def _build_decisions(all_markets, verdicts, analyses, capital, out_dir: Path,
+                     config: dict) -> list[dict]:
     """Merge screener verdicts with analyzer outputs into a unified per-market list.
 
     Per-market traces are already written by the analyzer sub-agent into
     `out_dir/traces/{slug}/`; here we just reference them.
     """
-    from src.core.tools import (
-        CONFIDENCE_KELLY_FRACTION, MIN_EDGE_TO_BET, MAX_BET_PCT_OF_EQUITY,
-    )
+    from src.core.kelly import size_bet
 
     decisions = []
     for m in all_markets:
@@ -191,15 +190,16 @@ def _build_decisions(all_markets, verdicts, analyses, capital, out_dir: Path) ->
             mp = analysis.get("model_prob") or m["yes_price"]
             conf = analysis.get("confidence", "skip")
             yes = m["yes_price"]
-            edge = mp - yes  # signed
-            direction = "SKIP"
-            amount = 0.0
-            if conf in CONFIDENCE_KELLY_FRACTION and abs(edge) >= MIN_EDGE_TO_BET:
-                direction = "YES" if edge > 0 else "NO"
-                kelly_raw = (edge / (1 - yes)) if edge > 0 else ((-edge) / yes)
-                kelly = max(0.0, kelly_raw) * CONFIDENCE_KELLY_FRACTION[conf]
-                kelly = min(kelly, MAX_BET_PCT_OF_EQUITY)
-                amount = round(capital * kelly, 2)
+            sizing = size_bet(
+                model_prob=mp,
+                market_prob=yes,
+                confidence=conf,
+                capital=capital,
+                config=config,
+            )
+            edge = sizing["edge"]
+            direction = sizing["direction"]
+            amount = sizing["amount"]
 
             slug_safe = slug.replace("/", "-")[:80]
             decisions.append({
@@ -221,7 +221,7 @@ def _build_decisions(all_markets, verdicts, analyses, capital, out_dir: Path) ->
                 "trace_dir": f"traces/{slug_safe}",
                 "research_summary": [
                     {"stance": r.get("stance"), "strength": r.get("strength"),
-                     "evidence_count": len(r.get("evidence", []))}
+                     "evidence_count": r.get("evidence_count", len(r.get("evidence_ids", [])))}
                     for r in analysis.get("research", [])
                 ],
                 "critic": (analysis.get("critic") or {}).get("suggested_action"),

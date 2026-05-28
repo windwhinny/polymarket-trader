@@ -60,6 +60,9 @@ class Bet:
     kelly_fraction: float
     amount: float
     entry_price: float
+    entry_fee: float = 0.0
+    entry_gas: float = 0.0
+    entry_cost: float = 0.0
     placed_at: Optional[str] = None      # ISO datetime: when the agent decided
     settle_due_at: Optional[str] = None  # ISO datetime: market end_date
     settled_at: Optional[str] = None     # ISO datetime: actual settlement time

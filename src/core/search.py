@@ -3,6 +3,7 @@
 import os
 import re
 import logging
+import time
 import requests
 from typing import Optional
 from datetime import datetime, timedelta
@@ -15,6 +16,12 @@ from .config import Cache
 log = logging.getLogger("pm-backtest.info")
 
 SERPAPI_BASE = "https://serpapi.com/search"
+
+
+def _safe_request_error(exc: Exception) -> str:
+    """Return a log-safe requests error without leaking api_key query params."""
+    msg = str(exc)
+    return re.sub(r"api_key=[^&\s]+", "api_key=<redacted>", msg)
 
 
 def _parse_article_date(date_str: str, now: Optional[datetime] = None) -> Optional[datetime]:
@@ -49,10 +56,31 @@ def _parse_article_date(date_str: str, now: Optional[datetime] = None) -> Option
 
 def _filter_by_date(articles: list, cutoff_dt: datetime) -> tuple[list, int]:
     """Filter articles to only those published on or before cutoff_dt."""
+    return _filter_by_date_policy(articles, cutoff_dt)
+
+
+def _is_relative_date(date_str: str) -> bool:
+    return bool(date_str and "ago" in date_str.lower())
+
+
+def _filter_by_date_policy(
+    articles: list,
+    cutoff_dt: datetime,
+    *,
+    include_unknown: bool = True,
+    include_relative: bool = True,
+) -> tuple[list, int]:
+    """Filter articles to cutoff with explicit policy for weak dates."""
     filtered = []
     skipped = 0
     for a in articles:
         date_str = a.get("date", "")
+        if not date_str and not include_unknown:
+            skipped += 1
+            continue
+        if _is_relative_date(date_str) and not include_relative:
+            skipped += 1
+            continue
         pub_dt = _parse_article_date(date_str, now=cutoff_dt)
         if pub_dt is None:
             # No date → include (can't prove it's after cutoff)
@@ -132,53 +160,99 @@ def search_context(
         # tbs date filter at API level — often too restrictive, rely on _filter_by_date instead
         log.info("SERPAPI | '%s' | cutoff=%s", sq[:80], end_date)
 
-        try:
-            proxies = None
-            if os.environ.get("HTTPS_PROXY"):
-                proxies = {"https": os.environ["HTTPS_PROXY"]}
-            resp = requests.get(SERPAPI_BASE, params={
-                    "api_key": serpapi_api_key,
-                    "engine": "google",
-                    "q": sq,
-                    "num": max_results * 2,  # fetch more, filter by date later
-                }, proxies=proxies, timeout=15)
-            resp.raise_for_status()
-            data = resp.json()
-        except Exception as e:
-            log.error("SERPAPI ERR | '%s': %s", sq[:60], e)
-            continue
+        params = {
+            "api_key": serpapi_api_key,
+            "engine": "google",
+            "q": sq,
+            "num": max_results * 2,  # fetch more, filter by date later
+            "tbs": (
+                f"cdr:1,cd_min:{_fmt_tbs_date(start_date)},"
+                f"cd_max:{_fmt_tbs_date(end_date)}"
+            ),
+        }
 
-        organic = data.get("organic_results", [])
-        log.debug("SERPAPI | %d raw results for '%s'", len(organic), sq[:60])
+        for mode, mode_params, filter_kwargs in [
+            ("tbs", params, {"include_unknown": True, "include_relative": True}),
+            (
+                "fallback-no-tbs",
+                {k: v for k, v in params.items() if k != "tbs"},
+                {"include_unknown": False, "include_relative": False},
+            ),
+        ]:
+            data = None
+            for attempt in range(1, 4):
+                try:
+                    proxies = None
+                    if os.environ.get("HTTPS_PROXY"):
+                        proxies = {"https": os.environ["HTTPS_PROXY"]}
+                    resp = requests.get(
+                        SERPAPI_BASE,
+                        params=mode_params,
+                        proxies=proxies,
+                        timeout=20,
+                    )
+                    resp.raise_for_status()
+                    data = resp.json()
+                    break
+                except requests.HTTPError as e:
+                    status = e.response.status_code if e.response is not None else None
+                    log.error("SERPAPI ERR | '%s' | status=%s | %s",
+                              sq[:60], status, _safe_request_error(e))
+                    if status in (401, 403):
+                        break
+                except (requests.ConnectionError, requests.Timeout,
+                        requests.exceptions.SSLError) as e:
+                    log.warning("SERPAPI RETRY | '%s' | attempt=%d/3 | %s",
+                                sq[:60], attempt, _safe_request_error(e))
+                    if attempt < 3:
+                        time.sleep(1.5 * attempt)
+                except Exception as e:
+                    log.error("SERPAPI ERR | '%s': %s", sq[:60], _safe_request_error(e))
+                    break
+            if data is None:
+                continue
 
-        # Enrich with date field and apply date filter
-        enriched = [{"title": r.get("title", ""), "snippet": r.get("snippet", ""),
-                     "link": r.get("link", ""), "date": r.get("date", "")}
-                    for r in organic]
-        filtered, skipped = _filter_by_date(enriched, end_dt)
-        if skipped:
-            log.info("SERPAPI | date-filtered: %d kept / %d skipped (before %s)",
-                     len(filtered), skipped, end_dt.strftime("%Y-%m-%d"))
+            organic = data.get("organic_results", [])
+            log.debug("SERPAPI | %s | %d raw results for '%s'",
+                      mode, len(organic), sq[:60])
+            if mode == "tbs" and not organic:
+                log.info("SERPAPI | tbs returned 0, retrying without tbs for '%s'",
+                         sq[:60])
 
-        if filtered:
-            parts = [f"## {r['title']}\n{r['snippet']}" for r in filtered]
-
-            summary = "\n\n".join(parts)
-            ctx = SearchContext(
-                query=sq,
-                end_date=end_date,
-                results=filtered,
-                summary=summary,
+            # Enrich with date field and apply date filter
+            enriched = [{"title": r.get("title", ""), "snippet": r.get("snippet", ""),
+                         "link": r.get("link", ""), "date": r.get("date", ""),
+                         "date_unknown": not bool(r.get("date", "")),
+                         "search_mode": mode}
+                        for r in organic]
+            filtered, skipped = _filter_by_date_policy(
+                enriched,
+                end_dt,
+                **filter_kwargs,
             )
+            if skipped:
+                log.info("SERPAPI | %s date-filtered: %d kept / %d skipped (before %s)",
+                         mode, len(filtered), skipped, end_dt.strftime("%Y-%m-%d"))
 
-            if cache:
-                cache.set({
-                    "query": ctx.query,
-                    "end_date": ctx.end_date,
-                    "results": ctx.results,
-                    "summary": ctx.summary,
-                }, *cache_key)
-            return ctx
+            if filtered:
+                parts = [f"## {r['title']}\n{r['snippet']}" for r in filtered]
+
+                summary = "\n\n".join(parts)
+                ctx = SearchContext(
+                    query=sq,
+                    end_date=end_date,
+                    results=filtered,
+                    summary=summary,
+                )
+
+                if cache:
+                    cache.set({
+                        "query": ctx.query,
+                        "end_date": ctx.end_date,
+                        "results": ctx.results,
+                        "summary": ctx.summary,
+                    }, *cache_key)
+                return ctx
 
         log.debug("SERPAPI | no results for '%s', trying next query", sq[:60])
 

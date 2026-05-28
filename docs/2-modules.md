@@ -59,12 +59,15 @@ LLM 失败时回退到 top-N by volume。
 - `fetch_markets(year, month, ...)` — 旧的月份接口，保留兼容
 
 ### `price_data.py` — Polymarket CLOB API
-- `fetch_price_at(token_ids, decision_dt)` — 任意时间点
+- `fetch_price_at_time(token_id, target_time, max_age_seconds=None)` — 取目标时间点之前的最后价格
+- `fetch_prices_at(..., max_age_seconds=None)` — 批量取历史价格，过旧价格可丢弃
 - `fetch_prices_at_month_end(...)` — 旧月底接口，保留兼容
 
 ### `search.py` — SerpAPI 后端
-- `search_context(query, end_date, ...)`：Google 搜索 + tbs 日期参数 + 文章级日期过滤
+- `search_context(query, end_date, ...)`：Google 搜索 + `tbs` 日期参数 + 文章级日期过滤
+- `fallback-no-tbs`：当 `tbs` 返回 0 条时去掉 `tbs` 重试，但只接受绝对日期不晚于 cutoff 的结果
 - `_parse_article_date(date_str, now=cutoff)`：相对日期"2 days ago"按 cutoff 解析
+- 每条结果带 `search_mode`，用于审计该 evidence 来自严格 `tbs` 还是 fallback
 
 ### `search_backend.py` — Search 后端工厂
 - `make_serpapi_backend(key, cache)` — 用于 backtest（支持日期过滤）
@@ -75,7 +78,9 @@ LLM 失败时回退到 top-N by volume。
 
 ### `simulator.py` — 费用 + 结算
 - `effective_spread(price)`：随价格距离 0.5 的远近线性放大（rails 处 +2.5%）
-- `simulate_bet()`：建仓时算 entry_price + 扣手续费
+- `entry_cost_for_amount()` / `cash_outlay_for_bet()`：stake + taker fee + gas 的现金口径
+- `max_affordable_amount()`：按完整 entry cost 反推可下注金额，避免现金被手续费打穿
+- `simulate_bet()`：建仓时算 entry_price、entry_fee、entry_gas、entry_cost
 - `settle_bet()`：到期结算（赢 = shares × $1）
 - `early_close_bet(bet, current_yes_price, exit_at)`：提前平仓（卖出价 = current × (1 - spread)，二次 taker fee）
 
@@ -85,7 +90,8 @@ LLM 失败时回退到 top-N by volume。
 - `AgentContext`、`_place_bet` 等是旧单 agent 路径残留，新 pipeline 不再走
 
 ### `kelly.py` — 参考实现
-新 pipeline 在 `tools.py` 常量上自己算，这个模块作 reference。
+- `size_bet()`：backtest / predict / baselines 共用 sizing，读取 `config.yaml` 的 `kelly` 参数
+- `kelly_bet()`：旧参考实现，保留兼容
 
 ### `baselines.py` — 4 个对照基线
 - `always-skip`：从不下注

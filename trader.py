@@ -50,6 +50,13 @@ def _resolve_llm(args, config):
     return LLMConfig(provider=args.provider, api_key=api_key, model=model, base_url=base_url)
 
 
+def _require_secret(value: str, name: str) -> None:
+    if not value:
+        raise SystemExit(
+            f"Missing required {name}. Set it in .env or pass the matching CLI flag."
+        )
+
+
 def cmd_backtest(args):
     """Run a backtest with the autonomous agent."""
     from src.core.logger import setup_logger
@@ -71,6 +78,9 @@ def cmd_backtest(args):
         config["backtest"]["min_monthly_volume"] = args.min_volume
 
     llm_cfg = _resolve_llm(args, config)
+    _require_secret(llm_cfg.api_key, "LLM API key")
+    _require_secret(config.get("api_keys", {}).get("serpapi", {}).get("key", ""),
+                    "SERPAPI_API_KEY")
 
     from src.core.tracer import create_run_id
     model_slug = llm_cfg.model.replace('/', '-')
@@ -96,6 +106,9 @@ def cmd_predict(args):
     config = load_config()
 
     llm_cfg = _resolve_llm(args, config)
+    _require_secret(llm_cfg.api_key, "LLM API key")
+    _require_secret(config.get("api_keys", {}).get("tavily", {}).get("key", ""),
+                    "TAVILY_API_KEY")
     prefix = args.run_id or "predict"
     run_id = create_run_id(prefix)
     output_dir = args.output or f"runs/{run_id}"

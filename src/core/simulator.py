@@ -1,5 +1,6 @@
 """Simulated trading engine with realistic fees."""
 import logging
+import math
 from typing import Optional
 
 from .types import Bet, Market
@@ -27,6 +28,26 @@ def effective_spread(price: float) -> float:
     return BASE_SPREAD_RATE + TAIL_SPREAD_RATE * distance
 
 
+def entry_cost_for_amount(amount: float) -> float:
+    """Cash required to open a position with `amount` of stake."""
+    stake = max(0.0, float(amount))
+    return stake + stake * TAKER_FEE_RATE + GAS_COST
+
+
+def max_affordable_amount(cash: float) -> float:
+    """Largest stake that can be opened without exceeding cash after fees."""
+    available = max(0.0, float(cash))
+    if available <= GAS_COST:
+        return 0.0
+    stake = (available - GAS_COST) / (1 + TAKER_FEE_RATE)
+    return max(0.0, math.floor(stake * 100) / 100)
+
+
+def cash_outlay_for_bet(bet: Bet) -> float:
+    """Cash deducted at entry, with a fallback for older serialized bets."""
+    return bet.entry_cost if bet.entry_cost else bet.amount
+
+
 def simulate_bet(
     market: Market,
     month: str,
@@ -49,7 +70,7 @@ def simulate_bet(
     entry_price = max(0.01, min(0.99, entry_price))
 
     taker_fee = amount * TAKER_FEE_RATE
-    total_cost = amount + taker_fee + GAS_COST
+    total_cost = entry_cost_for_amount(amount)
 
     log.debug("BET DETAIL | amount=%.4f raw_price=%.4f spread=%.4f entry=%.4f taker_fee=%.6f gas=%.4f total=%.4f shares=%.4f",
               amount, raw_price, spread, entry_price, taker_fee, GAS_COST,
@@ -65,6 +86,9 @@ def simulate_bet(
         kelly_fraction=kelly_fraction,
         amount=amount,
         entry_price=entry_price,
+        entry_fee=taker_fee,
+        entry_gas=GAS_COST,
+        entry_cost=total_cost,
     )
     return bet
 

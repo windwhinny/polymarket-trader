@@ -40,8 +40,10 @@
 30 天 horizon 与 prompt 推荐的 T-30d 偏好一致。
 
 ### ADR-3: 搜索 API 选择
-**决策**: backtest=SerpAPI（带 tbs 日期过滤），predict=Tavily（实时无日期）。
-**理由**: SerpAPI 的日期过滤是回测正确性的硬要求；Tavily 在实时模式下时效性更好。
+**决策**: backtest=SerpAPI（先 `tbs` 日期过滤，空结果时严格 no-tbs fallback），
+predict=Tavily（实时无日期）。
+**理由**: 日期过滤是回测正确性的硬要求；fallback 必须只保留绝对日期不晚于 cutoff 的结果，
+宁可少证据也不引入未来泄露。Tavily 在实时模式下时效性更好，但需要额外做来源质量控制。
 
 ### ADR-4: 手续费模型
 **决策**: 动态 spread + 0.01% taker + $0.005 gas。

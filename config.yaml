@@ -42,14 +42,18 @@ backtest:
   enable_early_exit: true
 
 kelly:
+  # Global Kelly throttle applied after confidence weighting.
   fraction: 0.5
   min_edge: 0.03
-  max_bet_pct: 0.25
+  max_bet_pct: 0.15
 
 api:
   gamma_base: "https://gamma-api.polymarket.com"
   clob_base: "https://clob.polymarket.com"
   request_delay: 0.3
+  # Drop historical CLOB prices if the latest pre-decision point is older than
+  # this. 172800 = 2 days; set null/omit to allow any age.
+  price_max_age_seconds: 172800
   page_limit: 100
   max_pages: 8
 
